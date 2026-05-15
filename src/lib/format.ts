@@ -1,11 +1,11 @@
-import { format } from "date-fns";
+import { formatClinicDate, formatClinicDateTime } from "@/lib/timezone";
 
 export function formatDateTime(date: Date) {
-  return format(date, "dd/MM/yyyy HH:mm");
+  return formatClinicDateTime(date);
 }
 
 export function formatDate(date: Date) {
-  return format(date, "dd/MM/yyyy");
+  return formatClinicDate(date);
 }
 
 export function getStatusLabel(status: string) {

@@ -3,6 +3,7 @@ import { findAppointmentConflict } from "@/lib/appointments";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { sendReminderToN8n } from "@/lib/n8n";
+import { zonedDateTimeToUtc } from "@/lib/timezone";
 
 type AppointmentWithClient = Appointment & {
   client: Client;
@@ -29,7 +30,7 @@ function detectIntent(text: string) {
   const normalized = normalizeText(text);
 
   if (
-    /\b(cancelar|cancelo|cancelada|cancelado|no voy|no asistire|no podre|no puedo asistir)\b/.test(
+    /\b(cancel\w*|no voy|no asistire|no podre|no puedo asistir)\b/.test(
       normalized
     )
   ) {
@@ -74,7 +75,10 @@ function parseSpanishDateTime(text: string) {
     hour = 0;
   }
 
-  const date = new Date(year, month, day, hour, minute, 0, 0);
+  const date = zonedDateTimeToUtc(
+    `${String(year).padStart(4, "0")}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`
+  );
 
   if (Number.isNaN(date.getTime()) || date <= now) {
     return null;

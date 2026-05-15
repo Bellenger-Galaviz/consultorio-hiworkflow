@@ -8,6 +8,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { sendReminderToN8n } from "@/lib/n8n";
 import { sendAppointmentReminderByType } from "@/lib/reminders";
+import { formatClinicTime, zonedDateTimeToUtc } from "@/lib/timezone";
 
 const clientSchema = z.object({
   fullName: z.string().trim().min(2),
@@ -51,17 +52,8 @@ function getReturnTo(formData: FormData) {
   return value.startsWith("/") ? value : "/";
 }
 
-function parseDateOrNull(value: string) {
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
 function formatConflictTime(date: Date) {
-  return date.toLocaleTimeString("es-MX", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
+  return formatClinicTime(date);
 }
 
 export async function createClient(formData: FormData) {
@@ -101,9 +93,9 @@ export async function createAppointment(formData: FormData) {
   }
 
   const data = result.data;
-  const startsAt = parseDateOrNull(`${data.appointmentDate}T${data.appointmentTime}:00`);
+  const startsAt = zonedDateTimeToUtc(data.appointmentDate, data.appointmentTime);
 
-  if (!startsAt) {
+  if (Number.isNaN(startsAt.getTime())) {
     goHomeWithError("La fecha y hora de la cita no es válida.");
   }
 

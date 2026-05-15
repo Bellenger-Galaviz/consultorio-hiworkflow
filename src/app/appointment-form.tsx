@@ -2,6 +2,7 @@
 
 import { Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { formatClinicTime, formatInputDate, zonedDateTimeToUtc } from "@/lib/timezone";
 import type { createAppointment } from "./actions";
 
 type ClientOption = {
@@ -47,7 +48,7 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
         return {
           conflict,
           label: conflict
-            ? `${slot} - ocupado con ${conflict.clientName} (${formatTime(new Date(conflict.startsAt))})`
+            ? `${slot} - ocupado con ${conflict.clientName} (${formatClinicTime(new Date(conflict.startsAt))})`
             : slot,
           value: slot
         };
@@ -160,7 +161,7 @@ function findSlotConflict({
   duration: number;
   time: string;
 }) {
-  const slotStart = new Date(`${date}T${time}:00`);
+  const slotStart = zonedDateTimeToUtc(date, time);
   const slotEnd = new Date(slotStart.getTime() + duration * 60 * 1000);
 
   return (
@@ -191,19 +192,4 @@ function buildSlots() {
   }
 
   return slots;
-}
-
-function formatTime(date: Date) {
-  return date.toLocaleTimeString("es-MX", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-function formatInputDate(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
 }

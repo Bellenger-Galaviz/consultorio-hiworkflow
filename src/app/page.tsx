@@ -11,15 +11,16 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDate, formatDateTime, getStatusLabel } from "@/lib/format";
+import { formatInputDate, getClinicDayBounds } from "@/lib/timezone";
 import {
   createAppointment,
   createClient,
-  sendClientWhatsappMessage,
   sendAppointmentReminder,
   updateAppointmentStatus
 } from "./actions";
 import { AppointmentForm } from "./appointment-form";
 import { logoutDoctor } from "./auth-actions";
+import { CrmPanel } from "./crm-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -50,8 +51,8 @@ export default async function Home({
   const params = await searchParams;
   const selectedDay = getSelectedDay(params.day);
   const chatSearch = normalizeSearch(params.chatSearch ?? "");
-  const { startOfDay, endOfDay } = getDayBounds(selectedDay);
-  const todayStart = getDayBounds(formatInputDate(new Date())).startOfDay;
+  const { startOfDay, endOfDay } = getClinicDayBounds(selectedDay);
+  const todayStart = getClinicDayBounds(formatInputDate(new Date())).startOfDay;
 
   const [clients, appointments, blockingAppointments, chatThreads] = await Promise.all([
     prisma.client.findMany({ where: { userId: user.id }, orderBy: { fullName: "asc" } }),
@@ -150,6 +151,25 @@ export default async function Home({
   ].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
   const selectedChatClient =
     sortedChatThreads.find((client) => client.id === selectedChatClientId) ?? null;
+  const crmThreads = sortedChatThreads.map((client) => {
+    const lastMessage = getThreadLastMessage(client);
+
+    return {
+      count: client._count.chatMessages + client._count.reminders,
+      fullName: client.fullName,
+      id: client.id,
+      lastAt: lastMessage?.createdAt.toISOString() ?? null,
+      lastMessage: lastMessage?.message ?? null,
+      phone: client.phone
+    };
+  });
+  const initialCrmMessages = crmMessages.map((message) => ({
+    appointmentTitle: message.appointment?.title ?? null,
+    createdAt: message.createdAt.toISOString(),
+    direction: message.direction,
+    id: message.id,
+    message: message.message
+  }));
   const returnTo = buildHomeHref({
     chatClientId: selectedChatClientId ?? undefined,
     chatSearch: params.chatSearch,
@@ -342,12 +362,10 @@ export default async function Home({
 
         <section className="grid gap-5">
           <Panel title="CRM de WhatsApp" icon={<MessageCircle size={18} />}>
-            <ChatCrm
-              chatMessages={crmMessages}
-              currentDay={params.day ? selectedDay : undefined}
-              search={params.chatSearch ?? ""}
-              selectedClient={selectedChatClient}
-              threads={filteredChatThreads}
+            <CrmPanel
+              initialMessages={initialCrmMessages}
+              initialSelectedClientId={selectedChatClient?.id ?? null}
+              threads={crmThreads}
             />
           </Panel>
         </section>
@@ -474,156 +492,6 @@ type ChatThread = {
     sentAt: Date;
   }>;
 };
-
-type ChatMessageItem = {
-  id: string;
-  appointment: { title: string } | null;
-  createdAt: Date;
-  direction: string;
-  intent: string | null;
-  message: string;
-};
-
-function ChatCrm({
-  chatMessages,
-  currentDay,
-  search,
-  selectedClient,
-  threads
-}: {
-  chatMessages: ChatMessageItem[];
-  currentDay?: string;
-  search: string;
-  selectedClient: ChatThread | null;
-  threads: ChatThread[];
-}) {
-  if (threads.length === 0 && !search) {
-    return (
-      <div className="rounded-md border border-black/10 px-4 py-8 text-center text-sm text-ink/60">
-        Aún no hay conversaciones de WhatsApp.
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid gap-4 lg:grid-cols-[0.85fr_1.65fr]">
-      <div className="grid gap-3">
-        <form className="flex gap-2" method="get">
-          {currentDay ? <input name="day" type="hidden" value={currentDay} /> : null}
-          {selectedClient ? <input name="chatClientId" type="hidden" value={selectedClient.id} /> : null}
-          <label className="grid flex-1 gap-1">
-            <span className="label">Buscar cliente</span>
-            <input
-              className="field"
-              defaultValue={search}
-              name="chatSearch"
-              placeholder="Nombre del cliente"
-              type="search"
-            />
-          </label>
-          <button className="secondary-button self-end" type="submit">
-            Buscar
-          </button>
-        </form>
-
-        <div className="overflow-hidden rounded-md border border-black/10">
-          {threads.map((client) => {
-            const lastMessage = getThreadLastMessage(client);
-            const isSelected = selectedClient?.id === client.id;
-
-            return (
-              <Link
-                className={`block border-b border-black/10 px-4 py-3 last:border-b-0 ${
-                  isSelected ? "bg-mint" : "bg-white hover:bg-paper"
-                }`}
-                href={buildHomeHref({ chatClientId: client.id, chatSearch: search, day: currentDay })}
-                key={client.id}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="font-semibold">{client.fullName}</p>
-                  <span className="text-xs font-semibold text-ink/50">
-                    {client._count.chatMessages + client._count.reminders}
-                  </span>
-                </div>
-                <p className="mt-1 line-clamp-1 text-sm text-ink/60">
-                  {lastMessage?.message ?? "Sin mensajes"}
-                </p>
-                {lastMessage ? (
-                  <p className="mt-1 text-xs text-ink/45">{formatDateTime(lastMessage.createdAt)}</p>
-                ) : null}
-              </Link>
-            );
-          })}
-          {threads.length === 0 ? (
-            <div className="px-4 py-6 text-center text-sm text-ink/60">
-              No encontré clientes con ese nombre.
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="rounded-md border border-black/10 bg-white">
-        <div className="border-b border-black/10 px-4 py-3">
-          <p className="font-semibold">{selectedClient?.fullName}</p>
-          <p className="text-sm text-ink/55">{selectedClient?.phone}</p>
-        </div>
-        <div className="grid max-h-[420px] gap-3 overflow-y-auto bg-paper p-4">
-          {chatMessages.map((message) => {
-            const isOutbound = message.direction === "OUTBOUND";
-
-            return (
-              <div
-                className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}
-                key={message.id}
-              >
-                <div
-                  className={`max-w-[78%] rounded-md px-3 py-2 text-sm shadow-sm ${
-                    isOutbound ? "bg-leaf text-white" : "bg-white text-ink"
-                  }`}
-                >
-                  <p>{message.message}</p>
-                  <p className={`mt-1 text-xs ${isOutbound ? "text-white/70" : "text-ink/45"}`}>
-                    {message.appointment?.title ? `${message.appointment.title} · ` : ""}
-                    {formatDateTime(message.createdAt)}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        {selectedClient ? (
-          <form action={sendClientWhatsappMessage} className="grid gap-2 border-t border-black/10 p-3">
-            <input name="clientId" type="hidden" value={selectedClient.id} />
-            <input
-              name="returnTo"
-              type="hidden"
-              value={buildHomeHref({
-                chatClientId: selectedClient.id,
-                chatSearch: search,
-                day: currentDay
-              })}
-            />
-            <label className="sr-only" htmlFor="crm-message">
-              Mensaje
-            </label>
-            <textarea
-              className="field min-h-20 resize-y"
-              id="crm-message"
-              maxLength={1000}
-              name="message"
-              placeholder={`Escribe a ${selectedClient.fullName}`}
-              required
-            />
-            <button className="primary-button justify-self-end" type="submit">
-              <MessageCircle size={16} />
-              Enviar WhatsApp
-            </button>
-          </form>
-        ) : null}
-      </div>
-    </div>
-  );
-}
 
 function getThreadLastDate(thread: ChatThread) {
   return getThreadLastMessage(thread)?.createdAt ?? null;
@@ -781,20 +649,4 @@ function normalizeSearch(value: string) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .trim();
-}
-
-function getDayBounds(day: string) {
-  const [year, month, date] = day.split("-").map(Number);
-  const startOfDay = new Date(year, month - 1, date, 0, 0, 0, 0);
-  const endOfDay = new Date(year, month - 1, date + 1, 0, 0, 0, 0);
-
-  return { startOfDay, endOfDay };
-}
-
-function formatInputDate(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
 }
