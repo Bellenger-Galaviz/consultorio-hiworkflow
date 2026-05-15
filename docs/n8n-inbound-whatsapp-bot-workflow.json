@@ -1,0 +1,106 @@
+{
+  "name": "Recibir respuestas WhatsApp y actualizar citas",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-respuesta",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "WebhookEvolutionEntrada",
+      "name": "Webhook - Respuesta Evolution API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst data = body.data ?? body;\nconst key = data.key ?? {};\nconst messageObject = data.message ?? {};\n\nconst remoteJid = key.remoteJid ?? body.remoteJid ?? body.from ?? body.phone ?? '';\nconst phone = String(remoteJid).replace(/@s\\.whatsapp\\.net|@g\\.us/g, '').replace(/\\D/g, '');\nconst message = body.message ?? body.text ?? body.body ?? messageObject.conversation ?? messageObject.extendedTextMessage?.text ?? '';\n\nreturn [{ json: { phone, message } }];"
+      },
+      "id": "NormalizarMensaje",
+      "name": "Normalizar mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 280]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://consultorio.hiworkflow.mx/api/whatsapp/inbound",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-webhook-secret",
+              "value": "cambia-este-secreto"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phone\": \"{{$json.phone}}\",\n  \"message\": \"{{$json.message}}\"\n}",
+        "options": {}
+      },
+      "id": "EnviarAlSistema",
+      "name": "Enviar respuesta al sistema",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 280]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true\n}",
+        "options": {}
+      },
+      "id": "ResponderOk",
+      "name": "Responder OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 280]
+    }
+  ],
+  "connections": {
+    "Webhook - Respuesta Evolution API": {
+      "main": [
+        [
+          {
+            "node": "Normalizar mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar mensaje": {
+      "main": [
+        [
+          {
+            "node": "Enviar respuesta al sistema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar respuesta al sistema": {
+      "main": [
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

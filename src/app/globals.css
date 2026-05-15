@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f7f5ef;
+  color: #17201b;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.field {
+  @apply w-full rounded-md border border-black/10 bg-white px-3 py-2 text-sm outline-none ring-leaf/20 transition focus:border-leaf focus:ring-4;
+}
+
+.label {
+  @apply text-xs font-semibold uppercase tracking-wide text-ink/60;
+}
+
+.icon-button {
+  @apply inline-flex h-9 w-9 items-center justify-center rounded-md border border-black/10 bg-white text-ink transition hover:border-leaf hover:text-leaf;
+}
+
+.primary-button {
+  @apply inline-flex items-center justify-center gap-2 rounded-md bg-leaf px-3 py-2 text-sm font-semibold text-white transition hover:bg-ink;
+}
+
+.secondary-button {
+  @apply inline-flex items-center justify-center gap-2 rounded-md border border-black/10 bg-white px-3 py-2 text-sm font-semibold text-ink transition hover:border-leaf hover:text-leaf;
+}
+
+.status-pill {
+  @apply inline-flex items-center rounded-full px-2 py-1 text-xs font-semibold;
+}

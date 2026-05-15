@@ -1,0 +1,59 @@
+{
+  "name": "Ejecutar recordatorios automáticos de citas",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "ScheduleCada15Min",
+      "name": "Cada 15 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [300, 280]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://consultorio.hiworkflow.mx/api/reminders/due",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-webhook-secret",
+              "value": "cambia-este-secreto"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "LlamarSistema",
+      "name": "Llamar sistema de citas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 280]
+    }
+  ],
+  "connections": {
+    "Cada 15 minutos": {
+      "main": [
+        [
+          {
+            "node": "Llamar sistema de citas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
