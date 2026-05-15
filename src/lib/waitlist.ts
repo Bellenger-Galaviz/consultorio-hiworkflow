@@ -1,16 +1,16 @@
-import type { Appointment, Client, WaitlistEntry } from "@prisma/client";
-import { findAppointmentConflict } from "@/lib/appointments";
+import type { Appointment, Client, WaitlistEntry, WaitlistOpportunity } from "@prisma/client";
+import { findAppointmentConflict, getNextClientAppointmentNumber } from "@/lib/appointments";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { sendReminderToN8n } from "@/lib/n8n";
-import { formatInputDate, formatInputTime, zonedDateTimeToUtc } from "@/lib/timezone";
+import { formatInputDate, formatInputTime } from "@/lib/timezone";
 
 type AppointmentWithClient = Appointment & {
   client: Client;
 };
 
-type WaitlistEntryWithClient = WaitlistEntry & {
-  client: Client;
+type OpportunityWithEntry = WaitlistOpportunity & {
+  offeredEntry: (WaitlistEntry & { client: Client }) | null;
 };
 
 function timeToMinutes(time: string) {
@@ -23,26 +23,32 @@ function normalizePhone(phone: string) {
   return phone.replace(/\D/g, "");
 }
 
-export function waitlistEntryMatchesAppointment(
+export function waitlistEntryMatchesSlot(
   entry: WaitlistEntry,
-  appointment: Appointment
+  startsAt: Date,
+  durationMin: number
 ) {
   if (entry.status !== "WAITING") {
     return false;
   }
 
-  const appointmentDate = formatInputDate(appointment.startsAt);
-
-  if (entry.desiredDate !== appointmentDate) {
+  if (entry.desiredDate !== formatInputDate(startsAt) || entry.durationMin > durationMin) {
     return false;
   }
 
-  const appointmentStart = timeToMinutes(formatInputTime(appointment.startsAt));
-  const appointmentEnd = appointmentStart + appointment.durationMin;
+  const slotStart = timeToMinutes(formatInputTime(startsAt));
+  const slotEnd = slotStart + durationMin;
   const desiredStart = timeToMinutes(entry.startTime);
   const desiredEnd = timeToMinutes(entry.endTime);
 
-  return appointmentStart >= desiredStart && appointmentEnd <= desiredEnd;
+  return slotStart >= desiredStart && slotEnd <= desiredEnd;
+}
+
+export function waitlistEntryMatchesOpportunity(
+  entry: WaitlistEntry,
+  opportunity: WaitlistOpportunity
+) {
+  return waitlistEntryMatchesSlot(entry, opportunity.startsAt, opportunity.durationMin);
 }
 
 export async function notifyWaitlistForAvailableSlot(appointment: AppointmentWithClient) {
@@ -53,48 +59,164 @@ export async function notifyWaitlistForAvailableSlot(appointment: AppointmentWit
       desiredDate: formatInputDate(appointment.startsAt),
       durationMin: { lte: appointment.durationMin }
     },
-    include: { client: true },
     orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
-    take: 10
+    take: 20
   });
   const matchingEntries = entries.filter((entry) =>
-    waitlistEntryMatchesAppointment(entry, appointment)
+    waitlistEntryMatchesSlot(entry, appointment.startsAt, appointment.durationMin)
   );
 
-  for (const entry of matchingEntries) {
-    const message = `Hola ${entry.client.fullName}, se liberó un horario para "${entry.title}" el ${formatDateTime(
-      appointment.startsAt
-    )}. Responde SI para agendarlo o NO para seguir en lista de espera.`;
+  if (matchingEntries.length === 0) {
+    return null;
+  }
 
-    await prisma.waitlistEntry.update({
-      where: { id: entry.id },
+  const existingOpportunity = await prisma.waitlistOpportunity.findFirst({
+    where: {
+      userId: appointment.userId,
+      sourceAppointmentId: appointment.id,
+      status: { in: ["AVAILABLE", "OFFERED"] }
+    }
+  });
+  const opportunity =
+    existingOpportunity ??
+    (await prisma.waitlistOpportunity.create({
       data: {
-        status: "OFFERED",
-        offeredStartsAt: appointment.startsAt,
-        offeredAt: new Date()
+        userId: appointment.userId,
+        sourceAppointmentId: appointment.id,
+        startsAt: appointment.startsAt,
+        durationMin: appointment.durationMin
       }
+    }));
+
+  await prisma.notification.create({
+    data: {
+      userId: appointment.userId,
+      type: "WAITLIST_SLOT_AVAILABLE",
+      title: "Horario disponible para lista de espera",
+      body: `Se liberó ${formatDateTime(appointment.startsAt)} para ${matchingEntries.length} cliente${
+        matchingEntries.length === 1 ? "" : "s"
+      } en lista de espera.`,
+      target: "#lista-espera",
+      appointmentId: appointment.id,
+      waitlistEntryId: matchingEntries[0]?.id,
+      waitlistOpportunityId: opportunity.id
+    }
+  });
+
+  return opportunity;
+}
+
+export async function offerWaitlistOpportunity({
+  entryId,
+  opportunityId,
+  userId
+}: {
+  entryId: string;
+  opportunityId: string;
+  userId: string;
+}) {
+  const opportunity = await prisma.waitlistOpportunity.findFirst({
+    where: {
+      id: opportunityId,
+      userId,
+      status: "AVAILABLE"
+    }
+  });
+
+  if (!opportunity) {
+    throw new Error("El horario ya no está disponible para ofrecer.");
+  }
+
+  const entry = await prisma.waitlistEntry.findFirst({
+    where: {
+      id: entryId,
+      userId,
+      status: "WAITING"
+    },
+    include: { client: true }
+  });
+
+  if (!entry || !waitlistEntryMatchesOpportunity(entry, opportunity)) {
+    throw new Error("Ese cliente ya no coincide con el horario disponible.");
+  }
+
+  const conflict = await findAppointmentConflict({
+    userId,
+    startsAt: opportunity.startsAt,
+    durationMin: entry.durationMin
+  });
+
+  if (conflict) {
+    await prisma.waitlistOpportunity.update({
+      where: { id: opportunity.id },
+      data: { status: "EXPIRED" }
     });
 
-    await prisma.chatMessage.create({
-      data: {
-        userId: entry.userId,
-        clientId: entry.clientId,
-        waitlistEntryId: entry.id,
-        direction: "OUTBOUND",
-        message,
-        intent: "WAITLIST_OFFER"
-      }
-    });
+    throw new Error("Ese horario ya fue ocupado por otra cita.");
+  }
 
+  const message = `Hola ${entry.client.fullName}, se liberó un horario para "${entry.title}" el ${formatDateTime(
+    opportunity.startsAt
+  )}. Responde SI para agendarlo o NO para seguir en lista de espera.`;
+
+  const locked = await prisma.waitlistOpportunity.updateMany({
+    where: { id: opportunity.id, status: "AVAILABLE" },
+    data: {
+      status: "OFFERED",
+      offeredEntryId: entry.id,
+      offeredAt: new Date()
+    }
+  });
+
+  if (locked.count === 0) {
+    throw new Error("Ese horario acaba de ser ofrecido a otro cliente.");
+  }
+
+  try {
     await sendReminderToN8n({
       client: entry.client,
       appointment: null,
       event: "waitlist.slot.available",
       message
     });
+  } catch (error) {
+    await prisma.waitlistOpportunity.update({
+      where: { id: opportunity.id },
+      data: {
+        status: "AVAILABLE",
+        offeredEntryId: null,
+        offeredAt: null
+      }
+    });
+
+    throw error;
   }
 
-  return matchingEntries.length;
+  await prisma.chatMessage.create({
+    data: {
+      userId,
+      clientId: entry.clientId,
+      waitlistEntryId: entry.id,
+      waitlistOpportunityId: opportunity.id,
+      direction: "OUTBOUND",
+      message,
+      intent: "WAITLIST_OFFER"
+    }
+  });
+
+  await prisma.notification.create({
+    data: {
+      userId,
+      type: "WAITLIST_OFFER_SENT",
+      title: "Oferta enviada",
+      body: `Se ofreció ${formatDateTime(opportunity.startsAt)} a ${entry.client.fullName}.`,
+      target: "#lista-espera",
+      waitlistEntryId: entry.id,
+      waitlistOpportunityId: opportunity.id
+    }
+  });
+
+  return { entry, opportunity };
 }
 
 export async function findPendingWaitlistOfferByPhone(phone: string) {
@@ -114,50 +236,57 @@ export async function findPendingWaitlistOfferByPhone(phone: string) {
     return null;
   }
 
-  const recentOffer = await prisma.chatMessage.findFirst({
+  return prisma.waitlistOpportunity.findFirst({
     where: {
-      clientId: { in: clientIds },
-      direction: "OUTBOUND",
-      intent: "WAITLIST_OFFER",
-      waitlistEntry: {
+      status: "OFFERED",
+      offeredEntry: {
         is: {
-          status: "OFFERED",
-          offeredStartsAt: { not: null }
+          clientId: { in: clientIds },
+          status: "WAITING"
         }
       }
     },
     include: {
-      waitlistEntry: {
+      offeredEntry: {
         include: { client: true }
       }
     },
-    orderBy: { createdAt: "desc" }
+    orderBy: { offeredAt: "desc" }
   });
-
-  return recentOffer?.waitlistEntry ?? null;
 }
 
-export async function bookWaitlistOffer(entry: WaitlistEntryWithClient) {
-  if (!entry.offeredStartsAt) {
-    return {
-      action: "WAITLIST_OFFER_EXPIRED",
-      ok: true
-    };
+export async function bookWaitlistOffer(opportunity: OpportunityWithEntry) {
+  const entry = opportunity.offeredEntry;
+
+  if (!entry) {
+    return { action: "WAITLIST_OFFER_EXPIRED", ok: true };
+  }
+
+  const locked = await prisma.waitlistOpportunity.updateMany({
+    where: {
+      id: opportunity.id,
+      offeredEntryId: entry.id,
+      status: "OFFERED"
+    },
+    data: { status: "BOOKING" }
+  });
+
+  if (locked.count === 0) {
+    return { action: "WAITLIST_OFFER_EXPIRED", ok: true };
   }
 
   const conflict = await findAppointmentConflict({
-    userId: entry.userId,
-    startsAt: entry.offeredStartsAt,
-    durationMin: entry.durationMin
+    userId: opportunity.userId,
+    startsAt: opportunity.startsAt,
+    durationMin: entry.durationMin,
+    ignoreAppointmentId: entry.fallbackAppointmentId ?? undefined
   });
 
   if (conflict) {
-    await prisma.waitlistEntry.update({
-      where: { id: entry.id },
+    await prisma.waitlistOpportunity.update({
+      where: { id: opportunity.id },
       data: {
-        status: "WAITING",
-        offeredStartsAt: null,
-        offeredAt: null
+        status: "EXPIRED"
       }
     });
 
@@ -165,9 +294,10 @@ export async function bookWaitlistOffer(entry: WaitlistEntryWithClient) {
 
     await prisma.chatMessage.create({
       data: {
-        userId: entry.userId,
+        userId: opportunity.userId,
         clientId: entry.clientId,
         waitlistEntryId: entry.id,
+        waitlistOpportunityId: opportunity.id,
         direction: "OUTBOUND",
         message,
         intent: "WAITLIST_CONFLICT_REPLY"
@@ -181,23 +311,44 @@ export async function bookWaitlistOffer(entry: WaitlistEntryWithClient) {
       message
     });
 
-    return {
-      action: "WAITLIST_CONFLICT",
-      ok: true
-    };
+    return { action: "WAITLIST_CONFLICT", ok: true };
   }
 
-  const appointment = await prisma.appointment.create({
-    data: {
-      userId: entry.userId,
-      clientId: entry.clientId,
-      title: entry.title,
-      startsAt: entry.offeredStartsAt,
-      durationMin: entry.durationMin,
-      status: "CONFIRMED",
-      notes: entry.notes ? `Desde lista de espera. ${entry.notes}` : "Desde lista de espera."
-    }
-  });
+  const fallbackAppointment = entry.fallbackAppointmentId
+    ? await prisma.appointment.findFirst({
+        where: {
+          id: entry.fallbackAppointmentId,
+          userId: opportunity.userId,
+          clientId: entry.clientId
+        }
+      })
+    : null;
+  const appointment = fallbackAppointment
+    ? await prisma.appointment.update({
+        where: { id: fallbackAppointment.id },
+        data: {
+          previousStartsAt: fallbackAppointment.startsAt,
+          startsAt: opportunity.startsAt,
+          durationMin: entry.durationMin,
+          status: "CONFIRMED",
+          notes: `${fallbackAppointment.notes ?? ""}\nAdelantada desde lista de espera de ${formatDateTime(
+            fallbackAppointment.startsAt
+          )} a ${formatDateTime(opportunity.startsAt)}.`.trim()
+        }
+      })
+    : await prisma.appointment.create({
+        data: {
+          userId: opportunity.userId,
+          clientId: entry.clientId,
+          clientAppointmentNumber:
+            entry.clientAppointmentNumber ?? (await getNextClientAppointmentNumber(entry.clientId)),
+          title: entry.title,
+          startsAt: opportunity.startsAt,
+          durationMin: entry.durationMin,
+          status: "CONFIRMED",
+          notes: entry.notes ? `Desde lista de espera. ${entry.notes}` : "Desde lista de espera."
+        }
+      });
 
   await prisma.waitlistEntry.update({
     where: { id: entry.id },
@@ -207,16 +358,38 @@ export async function bookWaitlistOffer(entry: WaitlistEntryWithClient) {
     }
   });
 
+  await prisma.waitlistOpportunity.update({
+    where: { id: opportunity.id },
+    data: {
+      status: "BOOKED",
+      bookedAppointmentId: appointment.id
+    }
+  });
+
+  await prisma.notification.create({
+    data: {
+      userId: opportunity.userId,
+      type: "WAITLIST_BOOKED",
+      title: "Lista de espera agendada",
+      body: `${entry.client.fullName} aceptó el horario de ${formatDateTime(appointment.startsAt)}.`,
+      target: `/?day=${formatInputDate(appointment.startsAt)}`,
+      appointmentId: appointment.id,
+      waitlistEntryId: entry.id,
+      waitlistOpportunityId: opportunity.id
+    }
+  });
+
   const message = `Perfecto ${entry.client.fullName}, tu cita "${entry.title}" quedó agendada para ${formatDateTime(
     appointment.startsAt
   )}.`;
 
   await prisma.chatMessage.create({
     data: {
-      userId: entry.userId,
+      userId: opportunity.userId,
       clientId: entry.clientId,
       appointmentId: appointment.id,
       waitlistEntryId: entry.id,
+      waitlistOpportunityId: opportunity.id,
       direction: "OUTBOUND",
       message,
       intent: "WAITLIST_BOOKED_REPLY"
@@ -230,19 +403,21 @@ export async function bookWaitlistOffer(entry: WaitlistEntryWithClient) {
     message
   });
 
-  return {
-    action: "WAITLIST_BOOKED",
-    appointmentId: appointment.id,
-    ok: true
-  };
+  return { action: "WAITLIST_BOOKED", appointmentId: appointment.id, ok: true };
 }
 
-export async function declineWaitlistOffer(entry: WaitlistEntryWithClient) {
-  await prisma.waitlistEntry.update({
-    where: { id: entry.id },
+export async function declineWaitlistOffer(opportunity: OpportunityWithEntry) {
+  const entry = opportunity.offeredEntry;
+
+  if (!entry) {
+    return { action: "WAITLIST_DECLINED", ok: true };
+  }
+
+  await prisma.waitlistOpportunity.update({
+    where: { id: opportunity.id },
     data: {
-      status: "WAITING",
-      offeredStartsAt: null,
+      status: "AVAILABLE",
+      offeredEntryId: null,
       offeredAt: null
     }
   });
@@ -251,9 +426,10 @@ export async function declineWaitlistOffer(entry: WaitlistEntryWithClient) {
 
   await prisma.chatMessage.create({
     data: {
-      userId: entry.userId,
+      userId: opportunity.userId,
       clientId: entry.clientId,
       waitlistEntryId: entry.id,
+      waitlistOpportunityId: opportunity.id,
       direction: "OUTBOUND",
       message,
       intent: "WAITLIST_DECLINED_REPLY"
@@ -267,12 +443,5 @@ export async function declineWaitlistOffer(entry: WaitlistEntryWithClient) {
     message
   });
 
-  return {
-    action: "WAITLIST_DECLINED",
-    ok: true
-  };
-}
-
-export function getWaitlistStartDateTime(entry: WaitlistEntry) {
-  return zonedDateTimeToUtc(entry.desiredDate, entry.startTime);
+  return { action: "WAITLIST_DECLINED", ok: true };
 }

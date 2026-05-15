@@ -2,6 +2,7 @@ import type { Appointment, Client } from "@prisma/client";
 import { findAppointmentConflict } from "@/lib/appointments";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
+import { createAppointmentStatusNotification } from "@/lib/notifications";
 import { sendReminderToN8n } from "@/lib/n8n";
 import { zonedDateTimeToUtc } from "@/lib/timezone";
 import {
@@ -253,11 +254,18 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   const intent = detectIntent(input.message);
 
   if (waitlistOffer && isWaitlistConfirm(input.message)) {
+    const entry = waitlistOffer.offeredEntry;
+
+    if (!entry) {
+      return { ok: true, action: "WAITLIST_OFFER_EXPIRED" };
+    }
+
     await prisma.chatMessage.create({
       data: {
         userId: waitlistOffer.userId,
-        clientId: waitlistOffer.clientId,
-        waitlistEntryId: waitlistOffer.id,
+        clientId: entry.clientId,
+        waitlistEntryId: entry.id,
+        waitlistOpportunityId: waitlistOffer.id,
         direction: "INBOUND",
         message: input.message,
         intent: "WAITLIST_ACCEPT"
@@ -268,11 +276,18 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   }
 
   if (waitlistOffer && isWaitlistDecline(input.message)) {
+    const entry = waitlistOffer.offeredEntry;
+
+    if (!entry) {
+      return { ok: true, action: "WAITLIST_DECLINED" };
+    }
+
     await prisma.chatMessage.create({
       data: {
         userId: waitlistOffer.userId,
-        clientId: waitlistOffer.clientId,
-        waitlistEntryId: waitlistOffer.id,
+        clientId: entry.clientId,
+        waitlistEntryId: entry.id,
+        waitlistOpportunityId: waitlistOffer.id,
         direction: "INBOUND",
         message: input.message,
         intent: "WAITLIST_DECLINE"
@@ -337,11 +352,25 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     return { ok: true, action: "CANCELLED_FALLBACK", appointmentId: appointment.id };
   }
 
+  if (appointment.status === "REPROGRAM_PENDING" && proposedDate) {
+    return reprogramAppointment(appointment, proposedDate);
+  }
+
+  if (appointment.status === "REPROGRAM_PENDING" && intent === "CONFIRM") {
+    const message = `${appointment.client.fullName}, esta cita está pendiente de reprogramación. Responde con la nueva fecha y hora en formato DD/MM/AAAA HH:mm para dejarla agendada.`;
+
+    await reply(appointment, message, "REPROGRAM_CONFIRM_REJECTED");
+
+    return { ok: true, action: "REPROGRAM_CONFIRM_REJECTED", appointmentId: appointment.id };
+  }
+
   if (intent === "CONFIRM") {
-    await prisma.appointment.update({
+    const confirmedAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
-      data: { status: "CONFIRMED" }
+      data: { status: "CONFIRMED" },
+      include: { client: true }
     });
+    await createAppointmentStatusNotification(confirmedAppointment, "CONFIRMED");
 
     const message = `Gracias ${appointment.client.fullName}, tu cita "${appointment.title}" queda confirmada para ${formatDateTime(
       appointment.startsAt
@@ -364,59 +393,20 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     )} quedó cancelada.`;
 
     await reply(appointment, message, "CANCEL_REPLY");
+    await createAppointmentStatusNotification(cancelledAppointment, "CANCELLED");
     await notifyWaitlistForAvailableSlot(cancelledAppointment);
 
     return { ok: true, action: "CANCELLED", appointmentId: appointment.id };
   }
 
-  if (appointment.status === "REPROGRAM_PENDING" && proposedDate) {
-    const conflict = await findAppointmentConflict({
-      userId: appointment.userId,
-      startsAt: proposedDate,
-      durationMin: appointment.durationMin,
-      ignoreAppointmentId: appointment.id
-    });
-
-    if (conflict) {
-      const message =
-        "Ese horario ya está ocupado. Por favor responde con otra fecha y hora en formato DD/MM/AAAA HH:mm.";
-
-      await reply(appointment, message, "REPROGRAM_CONFLICT_REPLY");
-
-      return { ok: true, action: "REPROGRAM_CONFLICT", appointmentId: appointment.id };
-    }
-
-    const updatedAppointment = await prisma.appointment.update({
+  if (intent === "REPROGRAM_REQUEST") {
+    const reprogramAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
-      data: {
-        previousStartsAt: appointment.previousStartsAt ?? appointment.startsAt,
-        startsAt: proposedDate,
-        status: "PENDING",
-        notes: `${appointment.notes ?? ""}\nReprogramada de ${formatDateTime(appointment.startsAt)} a ${formatDateTime(
-          proposedDate
-        )}.`.trim()
-      },
+      data: { status: "REPROGRAM_PENDING" },
       include: { client: true }
     });
-
-    const message = `Listo ${appointment.client.fullName}, registramos tu nueva cita "${appointment.title}" para ${formatDateTime(
-      proposedDate
-    )}.`;
-
-    await reply(updatedAppointment, message, "REPROGRAM_CONFIRM_REPLY");
-
-    return {
-      ok: true,
-      action: "REPROGRAMMED",
-      appointmentId: appointment.id
-    };
-  }
-
-  if (intent === "REPROGRAM_REQUEST") {
-    await prisma.appointment.update({
-      where: { id: appointment.id },
-      data: { status: "REPROGRAM_PENDING" }
-    });
+    await createAppointmentStatusNotification(reprogramAppointment, "REPROGRAM_PENDING");
+    await notifyWaitlistForAvailableSlot(reprogramAppointment);
 
     const message = `Claro ${appointment.client.fullName}. Responde con la nueva fecha y hora en formato DD/MM/AAAA HH:mm, por ejemplo 25/05/2026 16:30.`;
 

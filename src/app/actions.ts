@@ -3,13 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { findAppointmentConflict } from "@/lib/appointments";
+import { findAppointmentConflict, getNextClientAppointmentNumber } from "@/lib/appointments";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { createAppointmentStatusNotification } from "@/lib/notifications";
 import { sendReminderToN8n } from "@/lib/n8n";
 import { sendAppointmentReminderByType } from "@/lib/reminders";
 import { formatClinicTime, zonedDateTimeToUtc } from "@/lib/timezone";
-import { notifyWaitlistForAvailableSlot } from "@/lib/waitlist";
+import { notifyWaitlistForAvailableSlot, offerWaitlistOpportunity } from "@/lib/waitlist";
 
 const clientSchema = z.object({
   fullName: z.string().trim().min(2),
@@ -41,6 +42,8 @@ const waitlistSchema = z.object({
   desiredDate: z.string().min(1),
   durationMin: z.coerce.number().min(15).max(480),
   endTime: z.string().min(1),
+  fallbackDate: z.string().optional(),
+  fallbackTime: z.string().optional(),
   notes: z.string().optional(),
   priority: z.enum(["LOW", "NORMAL", "HIGH"]).default("NORMAL"),
   startTime: z.string().min(1),
@@ -48,6 +51,11 @@ const waitlistSchema = z.object({
 });
 
 const deleteWaitlistSchema = z.object({
+  waitlistEntryId: z.string().min(1)
+});
+
+const offerWaitlistSchema = z.object({
+  opportunityId: z.string().min(1),
   waitlistEntryId: z.string().min(1)
 });
 
@@ -202,10 +210,13 @@ export async function createAppointment(formData: FormData) {
   }
 
   try {
+    const clientAppointmentNumber = await getNextClientAppointmentNumber(data.clientId);
+
     await prisma.appointment.create({
       data: {
         userId: user.id,
         clientId: data.clientId,
+        clientAppointmentNumber,
         title: data.title,
         startsAt,
         durationMin: data.durationMin,
@@ -231,6 +242,7 @@ export async function createWaitlistEntry(formData: FormData) {
   const data = result.data;
   const startsAt = zonedDateTimeToUtc(data.desiredDate, data.startTime);
   const endsAt = zonedDateTimeToUtc(data.desiredDate, data.endTime);
+  const fallbackRequested = Boolean(data.fallbackDate || data.fallbackTime);
 
   if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || startsAt >= endsAt) {
     goHomeWithError("El rango de horario de lista de espera no es válido.");
@@ -248,6 +260,52 @@ export async function createWaitlistEntry(formData: FormData) {
     goHomeWithError("Selecciona un cliente válido.");
   }
 
+  let fallbackAppointmentId: string | null = null;
+  let clientAppointmentNumber: number | null = null;
+
+  if (fallbackRequested) {
+    if (!data.fallbackDate || !data.fallbackTime) {
+      goHomeWithError("Completa fecha y hora de respaldo, o deja ambos campos vacíos.");
+    }
+
+    const fallbackStartsAt = zonedDateTimeToUtc(data.fallbackDate, data.fallbackTime);
+
+    if (Number.isNaN(fallbackStartsAt.getTime()) || fallbackStartsAt <= new Date()) {
+      goHomeWithError("La cita de respaldo debe ser una fecha futura válida.");
+    }
+
+    const fallbackConflict = await findAppointmentConflict({
+      userId: user.id,
+      startsAt: fallbackStartsAt,
+      durationMin: data.durationMin
+    });
+
+    if (fallbackConflict) {
+      goHomeWithError(
+        `La cita de respaldo se empalma con la cita de ${fallbackConflict.client.fullName} a las ${formatConflictTime(
+          fallbackConflict.startsAt
+        )}.`
+      );
+    }
+
+    clientAppointmentNumber = await getNextClientAppointmentNumber(data.clientId);
+    const fallbackAppointment = await prisma.appointment.create({
+      data: {
+        userId: user.id,
+        clientId: data.clientId,
+        clientAppointmentNumber,
+        title: data.title,
+        startsAt: fallbackStartsAt,
+        durationMin: data.durationMin,
+        notes: data.notes
+          ? `Cita de respaldo vinculada a lista de espera. ${data.notes}`
+          : "Cita de respaldo vinculada a lista de espera."
+      }
+    });
+
+    fallbackAppointmentId = fallbackAppointment.id;
+  }
+
   await prisma.waitlistEntry.create({
     data: {
       userId: user.id,
@@ -258,12 +316,18 @@ export async function createWaitlistEntry(formData: FormData) {
       endTime: data.endTime,
       durationMin: data.durationMin,
       priority: data.priority,
-      notes: data.notes || null
+      notes: data.notes || null,
+      fallbackAppointmentId,
+      clientAppointmentNumber
     }
   });
 
   revalidatePath("/");
-  goHomeWithSuccess("Cliente agregado a lista de espera.");
+  goHomeWithSuccess(
+    fallbackAppointmentId
+      ? "Cliente agregado a lista de espera con cita de respaldo."
+      : "Cliente agregado a lista de espera."
+  );
 }
 
 export async function deleteWaitlistEntry(formData: FormData) {
@@ -327,12 +391,38 @@ export async function updateAppointmentStatus(formData: FormData) {
     data: { status }
   });
 
-  if (status === "CANCELLED") {
-    await notifyWaitlistForAvailableSlot({ ...appointment, status: "CANCELLED" });
+  const updatedAppointment = { ...appointment, status };
+
+  await createAppointmentStatusNotification(updatedAppointment, status);
+
+  if (status === "CANCELLED" || status === "REPROGRAM_PENDING") {
+    await notifyWaitlistForAvailableSlot(updatedAppointment);
   }
 
   revalidatePath("/");
   redirectWithMessage(returnTo, "success", "Estado de cita actualizado.");
+}
+
+export async function offerWaitlistSlot(formData: FormData) {
+  const user = await requireUser();
+  const result = offerWaitlistSchema.safeParse(Object.fromEntries(formData));
+
+  if (!result.success) {
+    goHomeWithError("No se pudo ofrecer ese horario.");
+  }
+
+  try {
+    await offerWaitlistOpportunity({
+      entryId: result.data.waitlistEntryId,
+      opportunityId: result.data.opportunityId,
+      userId: user.id
+    });
+  } catch (error) {
+    goHomeWithError(error instanceof Error ? error.message : "No se pudo ofrecer ese horario.");
+  }
+
+  revalidatePath("/");
+  goHomeWithSuccess("Oferta enviada por WhatsApp.");
 }
 
 export async function sendAppointmentReminder(formData: FormData) {

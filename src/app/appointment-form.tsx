@@ -27,7 +27,7 @@ type AppointmentFormProps = {
 const SLOT_START_HOUR = 7;
 const SLOT_END_HOUR = 21;
 const SLOT_INTERVAL_MIN = 15;
-const BLOCKING_STATUSES = new Set(["PENDING", "CONFIRMED", "REPROGRAM_PENDING"]);
+const BLOCKING_STATUSES = new Set(["PENDING", "CONFIRMED"]);
 
 export function AppointmentForm({ action, appointments, clients }: AppointmentFormProps) {
   const today = formatInputDate(new Date());

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 
-const BLOCKING_STATUSES = ["PENDING", "CONFIRMED", "REPROGRAM_PENDING"];
+const BLOCKING_STATUSES = ["PENDING", "CONFIRMED"];
 
 export function getAppointmentEnd(startsAt: Date, durationMin: number) {
   return new Date(startsAt.getTime() + durationMin * 60 * 1000);
@@ -35,4 +35,17 @@ export async function findAppointmentConflict({
       return startsAt < existingEnd && endsAt > appointment.startsAt;
     }) ?? null
   );
+}
+
+export async function getNextClientAppointmentNumber(clientId: string) {
+  const lastAppointment = await prisma.appointment.findFirst({
+    where: {
+      clientId,
+      clientAppointmentNumber: { not: null }
+    },
+    orderBy: { clientAppointmentNumber: "desc" },
+    select: { clientAppointmentNumber: true }
+  });
+
+  return (lastAppointment?.clientAppointmentNumber ?? 0) + 1;
 }

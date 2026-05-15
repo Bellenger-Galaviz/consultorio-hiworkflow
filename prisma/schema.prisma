@@ -30,6 +30,7 @@ model Appointment {
   id           String        @id @default(cuid())
   userId      String
   clientId    String
+  clientAppointmentNumber Int?
   title       String
   startsAt    DateTime
   previousStartsAt DateTime?
@@ -42,10 +43,12 @@ model Appointment {
   client      Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
   reminders   ReminderLog[]
   chatMessages ChatMessage[]
+  fallbackWaitlistEntries WaitlistEntry[] @relation("WaitlistFallbackAppointment")
 
   @@index([userId])
   @@index([startsAt])
   @@index([clientId])
+  @@unique([clientId, clientAppointmentNumber])
 }
 
 model WaitlistEntry {
@@ -63,16 +66,62 @@ model WaitlistEntry {
   offeredStartsAt     DateTime?
   offeredAt           DateTime?
   bookedAppointmentId String?
+  fallbackAppointmentId String?
+  clientAppointmentNumber Int?
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
   user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   client              Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  fallbackAppointment Appointment? @relation("WaitlistFallbackAppointment", fields: [fallbackAppointmentId], references: [id], onDelete: SetNull)
   chatMessages        ChatMessage[]
+  opportunities       WaitlistOpportunity[] @relation("WaitlistOpportunityEntry")
 
   @@index([userId])
   @@index([clientId])
   @@index([desiredDate])
   @@index([status])
+  @@index([fallbackAppointmentId])
+}
+
+model WaitlistOpportunity {
+  id                  String         @id @default(cuid())
+  userId              String
+  sourceAppointmentId String?
+  startsAt            DateTime
+  durationMin         Int
+  status              String         @default("AVAILABLE")
+  offeredEntryId      String?
+  offeredAt           DateTime?
+  bookedAppointmentId String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offeredEntry        WaitlistEntry? @relation("WaitlistOpportunityEntry", fields: [offeredEntryId], references: [id], onDelete: SetNull)
+  chatMessages        ChatMessage[]
+
+  @@index([userId])
+  @@index([startsAt])
+  @@index([status])
+  @@index([offeredEntryId])
+}
+
+model Notification {
+  id                    String   @id @default(cuid())
+  userId                String
+  type                  String
+  title                 String
+  body                  String
+  target                String?
+  status                String   @default("UNREAD")
+  appointmentId         String?
+  waitlistEntryId       String?
+  waitlistOpportunityId String?
+  createdAt             DateTime @default(now())
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model Attendance {
@@ -125,6 +174,8 @@ model User {
   reminders    ReminderLog[]
   chatMessages ChatMessage[]
   waitlistEntries WaitlistEntry[]
+  waitlistOpportunities WaitlistOpportunity[]
+  notifications Notification[]
 }
 
 model Session {
@@ -145,6 +196,7 @@ model ChatMessage {
   clientId      String
   appointmentId String?
   waitlistEntryId String?
+  waitlistOpportunityId String?
   direction     String
   message       String
   intent        String?
@@ -153,10 +205,12 @@ model ChatMessage {
   client        Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
   appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
   waitlistEntry  WaitlistEntry? @relation(fields: [waitlistEntryId], references: [id], onDelete: SetNull)
+  waitlistOpportunity WaitlistOpportunity? @relation(fields: [waitlistOpportunityId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([clientId])
   @@index([appointmentId])
   @@index([waitlistEntryId])
+  @@index([waitlistOpportunityId])
   @@index([createdAt])
 }

@@ -1,4 +1,5 @@
 import {
+  Bell,
   CalendarClock,
   Clock3,
   LogOut,
@@ -11,13 +12,14 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDate, formatDateTime, getStatusLabel } from "@/lib/format";
-import { formatInputDate, getClinicDayBounds, zonedDateTimeToUtc } from "@/lib/timezone";
+import { formatInputDate, formatInputTime, getClinicDayBounds, zonedDateTimeToUtc } from "@/lib/timezone";
 import {
   createAppointment,
   createClient,
   createWaitlistEntry,
   deleteClient,
   deleteWaitlistEntry,
+  offerWaitlistSlot,
   sendAppointmentReminder,
   updateAppointmentStatus
 } from "./actions";
@@ -48,6 +50,10 @@ export default async function Home({
     chatSearch?: string;
     day?: string;
     error?: string;
+    metricDay?: string;
+    metricMonth?: string;
+    metricView?: string;
+    metricYear?: string;
     success?: string;
   }>;
 }) {
@@ -59,8 +65,17 @@ export default async function Home({
   const { startOfDay, endOfDay } = getClinicDayBounds(selectedDay);
   const { startOfDay: startOfWeek } = getClinicDayBounds(weekDays[0]);
   const { endOfDay: endOfWeek } = getClinicDayBounds(weekDays[6]);
-  const { startOfDay: startOfMonth, endOfDay: endOfMonth } = getMonthBounds(selectedDay);
   const todayStart = getClinicDayBounds(formatInputDate(new Date())).startOfDay;
+  const metricView = getMetricView(params.metricView);
+  const metricDay = getSelectedDay(params.metricDay ?? selectedDay);
+  const metricMonth = getSelectedMonth(params.metricMonth ?? selectedDay.slice(0, 7));
+  const metricYear = getSelectedYear(params.metricYear ?? selectedDay.slice(0, 4));
+  const { start: metricStart, end: metricEnd } = getMetricBounds({
+    day: metricDay,
+    month: metricMonth,
+    view: metricView,
+    year: metricYear
+  });
 
   const [
     clients,
@@ -68,8 +83,10 @@ export default async function Home({
     blockingAppointments,
     chatThreads,
     weekAppointments,
-    monthAppointments,
-    waitlistEntries
+    metricAppointments,
+    waitlistEntries,
+    waitlistOpportunities,
+    notifications
   ] = await Promise.all([
     prisma.client.findMany({ where: { userId: user.id }, orderBy: { fullName: "asc" } }),
     prisma.appointment.findMany({
@@ -88,7 +105,7 @@ export default async function Home({
       where: {
         userId: user.id,
         startsAt: { gte: todayStart },
-        status: { in: ["PENDING", "CONFIRMED", "REPROGRAM_PENDING"] }
+        status: { in: ["PENDING", "CONFIRMED"] }
       },
       include: { client: true },
       orderBy: { startsAt: "asc" }
@@ -123,8 +140,8 @@ export default async function Home({
       where: {
         userId: user.id,
         startsAt: {
-          gte: startOfMonth,
-          lt: endOfMonth
+          gte: metricStart,
+          lt: metricEnd
         },
         NOT: { status: "REPROGRAMMED" }
       },
@@ -135,8 +152,25 @@ export default async function Home({
         userId: user.id,
         status: { in: ["WAITING", "OFFERED"] }
       },
-      include: { client: true },
+      include: { client: true, fallbackAppointment: true },
       orderBy: [{ desiredDate: "asc" }, { startTime: "asc" }]
+    }),
+    prisma.waitlistOpportunity.findMany({
+      where: {
+        userId: user.id,
+        status: { in: ["AVAILABLE", "OFFERED"] }
+      },
+      include: {
+        offeredEntry: {
+          include: { client: true }
+        }
+      },
+      orderBy: { startsAt: "asc" }
+    }),
+    prisma.notification.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      take: 8
     })
   ]);
 
@@ -222,29 +256,23 @@ export default async function Home({
     chatSearch: params.chatSearch,
     day: params.day ? selectedDay : undefined
   });
-  const dayStats = {
-    total: appointments.length,
-    confirmed: appointments.filter((item) => item.status === "CONFIRMED").length,
-    pending: appointments.filter((item) => item.status === "PENDING").length,
-    cancelled: appointments.filter((item) => item.status === "CANCELLED").length,
-    postponed: appointments.filter(
-      (item) => item.status === "REPROGRAM_PENDING" || item.previousStartsAt
-    ).length
-  };
-  const monthStats = {
-    total: monthAppointments.length,
-    attended: monthAppointments.filter((item) => item.status === "ATTENDED").length,
-    missed: monthAppointments.filter((item) => item.status === "MISSED").length,
-    cancelled: monthAppointments.filter((item) => item.status === "CANCELLED").length,
-    reprogrammed: monthAppointments.filter(
+  const metricStats = {
+    total: metricAppointments.length,
+    confirmed: metricAppointments.filter((item) => item.status === "CONFIRMED").length,
+    pending: metricAppointments.filter((item) => item.status === "PENDING").length,
+    attended: metricAppointments.filter((item) => item.status === "ATTENDED").length,
+    missed: metricAppointments.filter((item) => item.status === "MISSED").length,
+    cancelled: metricAppointments.filter((item) => item.status === "CANCELLED").length,
+    reprogrammed: metricAppointments.filter(
       (item) => item.status === "REPROGRAM_PENDING" || item.previousStartsAt
     ).length,
-    activeClients: new Set(monthAppointments.map((item) => item.clientId)).size
+    activeClients: new Set(metricAppointments.map((item) => item.clientId)).size
   };
   const attendanceRate =
-    monthStats.attended + monthStats.missed > 0
-      ? Math.round((monthStats.attended / (monthStats.attended + monthStats.missed)) * 100)
+    metricStats.attended + metricStats.missed > 0
+      ? Math.round((metricStats.attended / (metricStats.attended + metricStats.missed)) * 100)
       : 0;
+  const metricTitle = getMetricTitle({ day: metricDay, month: metricMonth, view: metricView, year: metricYear });
 
   return (
     <main className="min-h-screen">
@@ -259,6 +287,16 @@ export default async function Home({
             </h1>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm text-ink/70">
+            <NotificationsMenu
+              notifications={notifications.map((notification) => ({
+                body: notification.body,
+                createdAt: notification.createdAt,
+                id: notification.id,
+                status: notification.status,
+                target: notification.target,
+                title: notification.title
+              }))}
+            />
             <div className="flex items-center gap-2">
               <Clock3 size={18} />
               <span>{formatDate(new Date())}</span>
@@ -276,28 +314,51 @@ export default async function Home({
       <div className="mx-auto grid max-w-7xl gap-5 px-5 py-6">
         <FlashMessage error={params.error} success={params.success} />
 
-        <Panel title="Resumen del día" icon={<CalendarClock size={18} />}>
-          <p className="mb-4 text-sm font-semibold text-ink/60">
-            Citas programadas para {formatDate(startOfDay)}
-          </p>
+        <Panel title="Resumen y métricas" icon={<CalendarClock size={18} />}>
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <p className="text-sm font-semibold text-ink/60">{metricTitle}</p>
+            <form className="flex flex-wrap items-end gap-2" method="get">
+              <label className="grid gap-1">
+                <span className="label">Vista</span>
+                <select className="field w-32" defaultValue={metricView} name="metricView">
+                  <option value="day">Día</option>
+                  <option value="month">Mes</option>
+                  <option value="year">Año</option>
+                </select>
+              </label>
+              {metricView === "day" ? (
+                <label className="grid gap-1">
+                  <span className="label">Día</span>
+                  <input className="field w-44" defaultValue={metricDay} name="metricDay" type="date" />
+                </label>
+              ) : null}
+              {metricView === "month" ? (
+                <label className="grid gap-1">
+                  <span className="label">Mes</span>
+                  <input className="field w-44" defaultValue={metricMonth} name="metricMonth" type="month" />
+                </label>
+              ) : null}
+              {metricView === "year" ? (
+                <label className="grid gap-1">
+                  <span className="label">Año</span>
+                  <input className="field w-32" defaultValue={metricYear} min="2020" name="metricYear" type="number" />
+                </label>
+              ) : null}
+              <button className="secondary-button" type="submit">
+                Ver métricas
+              </button>
+            </form>
+          </div>
 
-          <section className="grid gap-4 md:grid-cols-5">
-            <Metric icon={<CalendarClock size={20} />} label="Citas del día" value={dayStats.total} />
-            <Metric icon={<CalendarClock size={20} />} label="Confirmadas" value={dayStats.confirmed} />
-            <Metric icon={<CalendarClock size={20} />} label="Pendientes" value={dayStats.pending} />
-            <Metric icon={<CalendarClock size={20} />} label="Canceladas" value={dayStats.cancelled} />
-            <Metric icon={<CalendarClock size={20} />} label="Pospuestas" value={dayStats.postponed} />
-          </section>
-        </Panel>
-
-        <Panel title="Métricas del mes" icon={<CalendarClock size={18} />}>
-          <section className="grid gap-4 md:grid-cols-6">
-            <Metric icon={<CalendarClock size={20} />} label="Citas" value={monthStats.total} />
+          <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-8">
+            <Metric icon={<CalendarClock size={20} />} label="Citas" value={metricStats.total} />
+            <Metric icon={<CalendarClock size={20} />} label="Confirmadas" value={metricStats.confirmed} />
+            <Metric icon={<CalendarClock size={20} />} label="Pendientes" value={metricStats.pending} />
+            <Metric icon={<CalendarClock size={20} />} label="Canceladas" value={metricStats.cancelled} />
+            <Metric icon={<CalendarClock size={20} />} label="Pospuestas" value={metricStats.reprogrammed} />
             <Metric icon={<CalendarClock size={20} />} label="Asistencia" value={`${attendanceRate}%`} />
-            <Metric icon={<CalendarClock size={20} />} label="Asistieron" value={monthStats.attended} />
-            <Metric icon={<CalendarClock size={20} />} label="No asistieron" value={monthStats.missed} />
-            <Metric icon={<CalendarClock size={20} />} label="Canceladas" value={monthStats.cancelled} />
-            <Metric icon={<Users size={20} />} label="Pacientes activos" value={monthStats.activeClients} />
+            <Metric icon={<CalendarClock size={20} />} label="No asistieron" value={metricStats.missed} />
+            <Metric icon={<Users size={20} />} label="Pacientes activos" value={metricStats.activeClients} />
           </section>
         </Panel>
 
@@ -357,7 +418,12 @@ export default async function Home({
                   {appointments.map((appointment) => (
                     <tr key={appointment.id}>
                       <td className="px-3 py-3 font-medium">{appointment.client.fullName}</td>
-                      <td className="px-3 py-3">{appointment.title}</td>
+                      <td className="px-3 py-3">
+                        <AppointmentTitle
+                          number={appointment.clientAppointmentNumber}
+                          title={appointment.title}
+                        />
+                      </td>
                       <td className="px-3 py-3">
                         <DateCell
                           previousStartsAt={appointment.previousStartsAt}
@@ -440,7 +506,7 @@ export default async function Home({
           </Panel>
         </section>
 
-        <Panel title="Lista de espera" icon={<CalendarClock size={18} />}>
+        <Panel id="lista-espera" title="Lista de espera" icon={<CalendarClock size={18} />}>
           <WaitlistPanel
             clients={clients.map((client) => ({
               fullName: client.fullName,
@@ -450,14 +516,29 @@ export default async function Home({
             deleteAction={deleteWaitlistEntry}
             entries={waitlistEntries.map((entry) => ({
               clientName: entry.client.fullName,
+              clientAppointmentNumber: entry.clientAppointmentNumber,
               desiredDate: entry.desiredDate,
               durationMin: entry.durationMin,
               endTime: entry.endTime,
+              fallbackAppointment: entry.fallbackAppointment
+                ? {
+                    startsAt: entry.fallbackAppointment.startsAt,
+                    status: entry.fallbackAppointment.status
+                  }
+                : null,
               id: entry.id,
               priority: entry.priority,
               startTime: entry.startTime,
               status: entry.status,
               title: entry.title
+            }))}
+            offerAction={offerWaitlistSlot}
+            opportunities={waitlistOpportunities.map((opportunity) => ({
+              durationMin: opportunity.durationMin,
+              id: opportunity.id,
+              offeredEntryId: opportunity.offeredEntryId,
+              startsAt: opportunity.startsAt,
+              status: opportunity.status
             }))}
           />
         </Panel>
@@ -509,6 +590,66 @@ function Metric({
   );
 }
 
+function AppointmentTitle({
+  number,
+  title
+}: {
+  number?: number | null;
+  title: string;
+}) {
+  return (
+    <div className="grid gap-1">
+      {number ? <span className="text-xs font-semibold text-leaf">Cita #{number}</span> : null}
+      <span>{title}</span>
+    </div>
+  );
+}
+
+function NotificationsMenu({
+  notifications
+}: {
+  notifications: Array<{
+    body: string;
+    createdAt: Date;
+    id: string;
+    status: string;
+    target: string | null;
+    title: string;
+  }>;
+}) {
+  const unread = notifications.filter((notification) => notification.status === "UNREAD").length;
+
+  return (
+    <details className="relative">
+      <summary className="secondary-button list-none">
+        <Bell size={16} />
+        Notificaciones
+        {unread > 0 ? (
+          <span className="rounded-full bg-coral px-2 py-0.5 text-xs font-bold text-white">
+            {unread}
+          </span>
+        ) : null}
+      </summary>
+      <div className="absolute right-0 z-20 mt-2 w-80 overflow-hidden rounded-md border border-black/10 bg-white shadow-soft">
+        {notifications.map((notification) => (
+          <Link
+            className="block border-b border-black/10 px-4 py-3 text-left last:border-b-0 hover:bg-paper"
+            href={notification.target || "/"}
+            key={notification.id}
+          >
+            <p className="font-semibold text-ink">{notification.title}</p>
+            <p className="mt-1 text-sm text-ink/60">{notification.body}</p>
+            <p className="mt-1 text-xs text-ink/45">{formatDateTime(notification.createdAt)}</p>
+          </Link>
+        ))}
+        {notifications.length === 0 ? (
+          <div className="px-4 py-6 text-center text-sm text-ink/60">Sin notificaciones.</div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 function WeeklyCalendar({
   appointments,
   selectedDay,
@@ -516,6 +657,7 @@ function WeeklyCalendar({
 }: {
   appointments: Array<{
     client: { fullName: string };
+    clientAppointmentNumber?: number | null;
     id: string;
     startsAt: Date;
     status: string;
@@ -551,6 +693,9 @@ function WeeklyCalendar({
                   key={appointment.id}
                 >
                   <p className="font-bold">{formatDateTime(appointment.startsAt).slice(-5)}</p>
+                  {appointment.clientAppointmentNumber ? (
+                    <p className="font-semibold">Cita #{appointment.clientAppointmentNumber}</p>
+                  ) : null}
                   <p className="line-clamp-1">{appointment.client.fullName}</p>
                   <p className="line-clamp-1 text-ink/65">{appointment.title}</p>
                 </div>
@@ -570,21 +715,36 @@ function WaitlistPanel({
   clients,
   createAction,
   deleteAction,
-  entries
+  entries,
+  offerAction,
+  opportunities
 }: {
   clients: Array<{ fullName: string; id: string }>;
   createAction: typeof createWaitlistEntry;
   deleteAction: typeof deleteWaitlistEntry;
+  offerAction: typeof offerWaitlistSlot;
   entries: Array<{
     clientName: string;
+    clientAppointmentNumber: number | null;
     desiredDate: string;
     durationMin: number;
     endTime: string;
+    fallbackAppointment: {
+      startsAt: Date;
+      status: string;
+    } | null;
     id: string;
     priority: string;
     startTime: string;
     status: string;
     title: string;
+  }>;
+  opportunities: Array<{
+    durationMin: number;
+    id: string;
+    offeredEntryId: string | null;
+    startsAt: Date;
+    status: string;
   }>;
 }) {
   return (
@@ -629,6 +789,19 @@ function WaitlistPanel({
             <option value="LOW">Baja</option>
           </select>
         </label>
+        <div className="grid gap-3 rounded-md border border-black/10 bg-paper p-3 md:col-span-2 md:grid-cols-2">
+          <p className="text-sm font-semibold text-ink/65 md:col-span-2">
+            Cita de respaldo opcional
+          </p>
+          <label className="grid gap-1">
+            <span className="label">Fecha de respaldo</span>
+            <input className="field" min={formatInputDate(new Date())} name="fallbackDate" type="date" />
+          </label>
+          <label className="grid gap-1">
+            <span className="label">Hora de respaldo</span>
+            <input className="field" name="fallbackTime" type="time" />
+          </label>
+        </div>
         <label className="grid gap-1 md:col-span-2">
           <span className="label">Notas</span>
           <textarea className="field min-h-16 resize-y" name="notes" />
@@ -640,11 +813,22 @@ function WaitlistPanel({
       </form>
 
       <div className="overflow-hidden rounded-md border border-black/10">
-        {entries.map((entry) => (
+        {entries.map((entry) => {
+          const matchingOpportunities = opportunities.filter((opportunity) =>
+            waitlistEntryMatchesOpportunityForView(entry, opportunity)
+          );
+          const offeredOpportunity = opportunities.find(
+            (opportunity) => opportunity.status === "OFFERED" && opportunity.offeredEntryId === entry.id
+          );
+
+          return (
           <div className="grid gap-2 border-b border-black/10 px-4 py-3 last:border-b-0" key={entry.id}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="font-semibold">{entry.clientName}</p>
+                {entry.clientAppointmentNumber ? (
+                  <p className="text-xs font-semibold text-leaf">Cita #{entry.clientAppointmentNumber}</p>
+                ) : null}
                 <p className="text-sm text-ink/60">{entry.title}</p>
               </div>
               <span className={`status-pill ${entry.status === "OFFERED" ? "bg-amber/20 text-ink" : "bg-mint text-leaf"}`}>
@@ -654,14 +838,37 @@ function WaitlistPanel({
             <p className="text-sm text-ink/60">
               {entry.desiredDate} de {entry.startTime} a {entry.endTime} · {entry.durationMin} min · {getPriorityLabel(entry.priority)}
             </p>
-            <form action={deleteAction}>
-              <input name="waitlistEntryId" type="hidden" value={entry.id} />
-              <button className="secondary-button text-coral" type="submit">
-                Eliminar
-              </button>
-            </form>
+            {entry.fallbackAppointment ? (
+              <p className="text-sm font-semibold text-ink/60">
+                Respaldo: {formatDateTime(entry.fallbackAppointment.startsAt)} ·{" "}
+                {getStatusLabel(entry.fallbackAppointment.status)}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              {matchingOpportunities.map((opportunity) => (
+                <form action={offerAction} key={opportunity.id}>
+                  <input name="waitlistEntryId" type="hidden" value={entry.id} />
+                  <input name="opportunityId" type="hidden" value={opportunity.id} />
+                  <button className="secondary-button" type="submit">
+                    Ofrecer {formatDateTime(opportunity.startsAt)}
+                  </button>
+                </form>
+              ))}
+              {offeredOpportunity ? (
+                <span className="status-pill bg-amber/20 text-ink">
+                  Oferta enviada para {formatDateTime(offeredOpportunity.startsAt)}
+                </span>
+              ) : null}
+              <form action={deleteAction}>
+                <input name="waitlistEntryId" type="hidden" value={entry.id} />
+                <button className="secondary-button text-coral" type="submit">
+                  Eliminar
+                </button>
+              </form>
+            </div>
           </div>
-        ))}
+          );
+        })}
         {entries.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-ink/60">
             Sin pacientes en lista de espera.
@@ -675,14 +882,16 @@ function WaitlistPanel({
 function Panel({
   title,
   icon,
+  id,
   children
 }: {
   title: string;
   icon: React.ReactNode;
+  id?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-md border border-black/10 bg-white p-4 shadow-soft">
+    <section className="rounded-md border border-black/10 bg-white p-4 shadow-soft" id={id}>
       <div className="mb-4 flex items-center gap-2">
         <span className="flex h-8 w-8 items-center justify-center rounded-md bg-paper text-leaf">
           {icon}
@@ -927,8 +1136,123 @@ function getMonthBounds(day: string) {
   };
 }
 
+function getYearBounds(year: string) {
+  const parsedYear = Number(year);
+
+  return {
+    startOfDay: getClinicDayBounds(`${parsedYear}-01-01`).startOfDay,
+    endOfDay: getClinicDayBounds(`${parsedYear + 1}-01-01`).startOfDay
+  };
+}
+
+function getMetricView(view?: string) {
+  return view === "month" || view === "year" ? view : "day";
+}
+
+function getSelectedMonth(month?: string) {
+  if (month && /^\d{4}-\d{2}$/.test(month)) {
+    return month;
+  }
+
+  return formatInputDate(new Date()).slice(0, 7);
+}
+
+function getSelectedYear(year?: string) {
+  if (year && /^\d{4}$/.test(year)) {
+    return year;
+  }
+
+  return formatInputDate(new Date()).slice(0, 4);
+}
+
+function getMetricBounds({
+  day,
+  month,
+  view,
+  year
+}: {
+  day: string;
+  month: string;
+  view: string;
+  year: string;
+}) {
+  if (view === "year") {
+    const bounds = getYearBounds(year);
+
+    return { start: bounds.startOfDay, end: bounds.endOfDay };
+  }
+
+  if (view === "month") {
+    const bounds = getMonthBounds(`${month}-01`);
+
+    return { start: bounds.startOfDay, end: bounds.endOfDay };
+  }
+
+  const bounds = getClinicDayBounds(day);
+
+  return { start: bounds.startOfDay, end: bounds.endOfDay };
+}
+
+function getMetricTitle({
+  day,
+  month,
+  view,
+  year
+}: {
+  day: string;
+  month: string;
+  view: string;
+  year: string;
+}) {
+  if (view === "year") {
+    return `Métricas del año ${year}`;
+  }
+
+  if (view === "month") {
+    return `Métricas del mes ${month}`;
+  }
+
+  return `Métricas del día ${formatDate(zonedDayForDisplay(day))}`;
+}
+
 function zonedDayForDisplay(day: string) {
   return zonedDateTimeToUtc(day, "12:00");
+}
+
+function waitlistEntryMatchesOpportunityForView(
+  entry: {
+    desiredDate: string;
+    durationMin: number;
+    endTime: string;
+    startTime: string;
+    status: string;
+  },
+  opportunity: {
+    durationMin: number;
+    startsAt: Date;
+    status: string;
+  }
+) {
+  if (entry.status !== "WAITING" || opportunity.status !== "AVAILABLE") {
+    return false;
+  }
+
+  if (entry.desiredDate !== formatInputDate(opportunity.startsAt) || entry.durationMin > opportunity.durationMin) {
+    return false;
+  }
+
+  const slotStart = timeToMinutes(formatInputTime(opportunity.startsAt));
+  const slotEnd = slotStart + opportunity.durationMin;
+  const desiredStart = timeToMinutes(entry.startTime);
+  const desiredEnd = timeToMinutes(entry.endTime);
+
+  return slotStart >= desiredStart && slotEnd <= desiredEnd;
+}
+
+function timeToMinutes(time: string) {
+  const [hour, minute] = time.split(":").map(Number);
+
+  return hour * 60 + minute;
 }
 
 function getWaitlistStatusLabel(status: string) {
