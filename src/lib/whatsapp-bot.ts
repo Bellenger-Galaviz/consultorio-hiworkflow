@@ -4,6 +4,12 @@ import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { sendReminderToN8n } from "@/lib/n8n";
 import { zonedDateTimeToUtc } from "@/lib/timezone";
+import {
+  bookWaitlistOffer,
+  declineWaitlistOffer,
+  findPendingWaitlistOfferByPhone,
+  notifyWaitlistForAvailableSlot
+} from "@/lib/waitlist";
 
 type AppointmentWithClient = Appointment & {
   client: Client;
@@ -46,6 +52,18 @@ function detectIntent(text: string) {
   }
 
   return "UNKNOWN";
+}
+
+function isWaitlistConfirm(text: string) {
+  const normalized = normalizeText(text);
+
+  return /\b(si|sí|confirmo|acepto|quiero|agendalo|agendar)\b/.test(normalized);
+}
+
+function isWaitlistDecline(text: string) {
+  const normalized = normalizeText(text);
+
+  return /\b(no|paso|no puedo|cancelar|cancelo)\b/.test(normalized);
 }
 
 function parseSpanishDateTime(text: string) {
@@ -223,6 +241,46 @@ async function reprogramAppointment(appointment: AppointmentWithClient, proposed
 
 export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   const found = await findActiveAppointment(input.phone);
+  const waitlistOffer = await findPendingWaitlistOfferByPhone(input.phone);
+
+  if (!found && !waitlistOffer) {
+    return {
+      ok: true,
+      action: "NO_ACTIVE_APPOINTMENT"
+    };
+  }
+
+  const intent = detectIntent(input.message);
+
+  if (waitlistOffer && isWaitlistConfirm(input.message)) {
+    await prisma.chatMessage.create({
+      data: {
+        userId: waitlistOffer.userId,
+        clientId: waitlistOffer.clientId,
+        waitlistEntryId: waitlistOffer.id,
+        direction: "INBOUND",
+        message: input.message,
+        intent: "WAITLIST_ACCEPT"
+      }
+    });
+
+    return bookWaitlistOffer(waitlistOffer);
+  }
+
+  if (waitlistOffer && isWaitlistDecline(input.message)) {
+    await prisma.chatMessage.create({
+      data: {
+        userId: waitlistOffer.userId,
+        clientId: waitlistOffer.clientId,
+        waitlistEntryId: waitlistOffer.id,
+        direction: "INBOUND",
+        message: input.message,
+        intent: "WAITLIST_DECLINE"
+      }
+    });
+
+    return declineWaitlistOffer(waitlistOffer);
+  }
 
   if (!found) {
     return {
@@ -232,7 +290,6 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   }
 
   const { appointment } = found;
-  const intent = detectIntent(input.message);
 
   await prisma.chatMessage.create({
     data: {
@@ -296,9 +353,10 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   }
 
   if (intent === "CANCEL") {
-    await prisma.appointment.update({
+    const cancelledAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
-      data: { status: "CANCELLED" }
+      data: { status: "CANCELLED" },
+      include: { client: true }
     });
 
     const message = `Entendido ${appointment.client.fullName}, tu cita "${appointment.title}" del ${formatDateTime(
@@ -306,6 +364,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     )} quedó cancelada.`;
 
     await reply(appointment, message, "CANCEL_REPLY");
+    await notifyWaitlistForAvailableSlot(cancelledAppointment);
 
     return { ok: true, action: "CANCELLED", appointmentId: appointment.id };
   }

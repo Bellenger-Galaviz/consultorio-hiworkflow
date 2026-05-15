@@ -67,6 +67,12 @@ export function formatInputDate(date: Date) {
   ].join("-");
 }
 
+export function formatInputTime(date: Date) {
+  const parts = getParts(date);
+
+  return `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
+}
+
 export function formatClinicDate(date: Date) {
   return new Intl.DateTimeFormat("es-MX", {
     day: "2-digit",

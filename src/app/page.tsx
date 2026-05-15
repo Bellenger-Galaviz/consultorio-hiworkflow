@@ -11,11 +11,13 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDate, formatDateTime, getStatusLabel } from "@/lib/format";
-import { formatInputDate, getClinicDayBounds } from "@/lib/timezone";
+import { formatInputDate, getClinicDayBounds, zonedDateTimeToUtc } from "@/lib/timezone";
 import {
   createAppointment,
   createClient,
+  createWaitlistEntry,
   deleteClient,
+  deleteWaitlistEntry,
   sendAppointmentReminder,
   updateAppointmentStatus
 } from "./actions";
@@ -53,10 +55,22 @@ export default async function Home({
   const params = await searchParams;
   const selectedDay = getSelectedDay(params.day);
   const chatSearch = normalizeSearch(params.chatSearch ?? "");
+  const weekDays = getWeekDays(selectedDay);
   const { startOfDay, endOfDay } = getClinicDayBounds(selectedDay);
+  const { startOfDay: startOfWeek } = getClinicDayBounds(weekDays[0]);
+  const { endOfDay: endOfWeek } = getClinicDayBounds(weekDays[6]);
+  const { startOfDay: startOfMonth, endOfDay: endOfMonth } = getMonthBounds(selectedDay);
   const todayStart = getClinicDayBounds(formatInputDate(new Date())).startOfDay;
 
-  const [clients, appointments, blockingAppointments, chatThreads] = await Promise.all([
+  const [
+    clients,
+    appointments,
+    blockingAppointments,
+    chatThreads,
+    weekAppointments,
+    monthAppointments,
+    waitlistEntries
+  ] = await Promise.all([
     prisma.client.findMany({ where: { userId: user.id }, orderBy: { fullName: "asc" } }),
     prisma.appointment.findMany({
       where: {
@@ -92,6 +106,37 @@ export default async function Home({
           take: 1
         }
       }
+    }),
+    prisma.appointment.findMany({
+      where: {
+        userId: user.id,
+        startsAt: {
+          gte: startOfWeek,
+          lt: endOfWeek
+        },
+        NOT: { status: "REPROGRAMMED" }
+      },
+      include: { client: true },
+      orderBy: { startsAt: "asc" }
+    }),
+    prisma.appointment.findMany({
+      where: {
+        userId: user.id,
+        startsAt: {
+          gte: startOfMonth,
+          lt: endOfMonth
+        },
+        NOT: { status: "REPROGRAMMED" }
+      },
+      include: { client: true }
+    }),
+    prisma.waitlistEntry.findMany({
+      where: {
+        userId: user.id,
+        status: { in: ["WAITING", "OFFERED"] }
+      },
+      include: { client: true },
+      orderBy: [{ desiredDate: "asc" }, { startTime: "asc" }]
     })
   ]);
 
@@ -186,6 +231,20 @@ export default async function Home({
       (item) => item.status === "REPROGRAM_PENDING" || item.previousStartsAt
     ).length
   };
+  const monthStats = {
+    total: monthAppointments.length,
+    attended: monthAppointments.filter((item) => item.status === "ATTENDED").length,
+    missed: monthAppointments.filter((item) => item.status === "MISSED").length,
+    cancelled: monthAppointments.filter((item) => item.status === "CANCELLED").length,
+    reprogrammed: monthAppointments.filter(
+      (item) => item.status === "REPROGRAM_PENDING" || item.previousStartsAt
+    ).length,
+    activeClients: new Set(monthAppointments.map((item) => item.clientId)).size
+  };
+  const attendanceRate =
+    monthStats.attended + monthStats.missed > 0
+      ? Math.round((monthStats.attended / (monthStats.attended + monthStats.missed)) * 100)
+      : 0;
 
   return (
     <main className="min-h-screen">
@@ -229,6 +288,25 @@ export default async function Home({
             <Metric icon={<CalendarClock size={20} />} label="Canceladas" value={dayStats.cancelled} />
             <Metric icon={<CalendarClock size={20} />} label="Pospuestas" value={dayStats.postponed} />
           </section>
+        </Panel>
+
+        <Panel title="Métricas del mes" icon={<CalendarClock size={18} />}>
+          <section className="grid gap-4 md:grid-cols-6">
+            <Metric icon={<CalendarClock size={20} />} label="Citas" value={monthStats.total} />
+            <Metric icon={<CalendarClock size={20} />} label="Asistencia" value={`${attendanceRate}%`} />
+            <Metric icon={<CalendarClock size={20} />} label="Asistieron" value={monthStats.attended} />
+            <Metric icon={<CalendarClock size={20} />} label="No asistieron" value={monthStats.missed} />
+            <Metric icon={<CalendarClock size={20} />} label="Canceladas" value={monthStats.cancelled} />
+            <Metric icon={<Users size={20} />} label="Pacientes activos" value={monthStats.activeClients} />
+          </section>
+        </Panel>
+
+        <Panel title="Calendario semanal" icon={<CalendarClock size={18} />}>
+          <WeeklyCalendar
+            appointments={weekAppointments}
+            selectedDay={selectedDay}
+            weekDays={weekDays}
+          />
         </Panel>
 
         <section>
@@ -362,6 +440,28 @@ export default async function Home({
           </Panel>
         </section>
 
+        <Panel title="Lista de espera" icon={<CalendarClock size={18} />}>
+          <WaitlistPanel
+            clients={clients.map((client) => ({
+              fullName: client.fullName,
+              id: client.id
+            }))}
+            createAction={createWaitlistEntry}
+            deleteAction={deleteWaitlistEntry}
+            entries={waitlistEntries.map((entry) => ({
+              clientName: entry.client.fullName,
+              desiredDate: entry.desiredDate,
+              durationMin: entry.durationMin,
+              endTime: entry.endTime,
+              id: entry.id,
+              priority: entry.priority,
+              startTime: entry.startTime,
+              status: entry.status,
+              title: entry.title
+            }))}
+          />
+        </Panel>
+
         <section className="grid gap-5">
           <Panel title="CRM de WhatsApp" icon={<MessageCircle size={18} />}>
             <CrmPanel
@@ -396,7 +496,7 @@ function Metric({
 }: {
   icon: React.ReactNode;
   label: string;
-  value: number;
+  value: number | string;
 }) {
   return (
     <div className="rounded-md border border-black/10 bg-white p-4">
@@ -405,6 +505,169 @@ function Metric({
       </div>
       <p className="text-sm font-semibold text-ink/60">{label}</p>
       <p className="text-3xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function WeeklyCalendar({
+  appointments,
+  selectedDay,
+  weekDays
+}: {
+  appointments: Array<{
+    client: { fullName: string };
+    id: string;
+    startsAt: Date;
+    status: string;
+    title: string;
+  }>;
+  selectedDay: string;
+  weekDays: string[];
+}) {
+  return (
+    <div className="grid gap-3 md:grid-cols-7">
+      {weekDays.map((day) => {
+        const dayAppointments = appointments.filter(
+          (appointment) => formatInputDate(appointment.startsAt) === day
+        );
+        const isSelected = day === selectedDay;
+
+        return (
+          <Link
+            className={`min-h-40 rounded-md border p-3 ${
+              isSelected ? "border-leaf bg-mint/60" : "border-black/10 bg-white hover:bg-paper"
+            }`}
+            href={buildHomeHref({ day })}
+            key={day}
+          >
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="font-semibold">{formatDate(zonedDayForDisplay(day))}</p>
+              <span className="text-xs font-semibold text-ink/50">{dayAppointments.length}</span>
+            </div>
+            <div className="grid gap-2">
+              {dayAppointments.map((appointment) => (
+                <div
+                  className={`rounded-md px-2 py-2 text-xs ${statusClass[appointment.status] ?? "bg-paper text-ink"}`}
+                  key={appointment.id}
+                >
+                  <p className="font-bold">{formatDateTime(appointment.startsAt).slice(-5)}</p>
+                  <p className="line-clamp-1">{appointment.client.fullName}</p>
+                  <p className="line-clamp-1 text-ink/65">{appointment.title}</p>
+                </div>
+              ))}
+              {dayAppointments.length === 0 ? (
+                <p className="text-xs font-semibold text-ink/45">Sin citas</p>
+              ) : null}
+            </div>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+function WaitlistPanel({
+  clients,
+  createAction,
+  deleteAction,
+  entries
+}: {
+  clients: Array<{ fullName: string; id: string }>;
+  createAction: typeof createWaitlistEntry;
+  deleteAction: typeof deleteWaitlistEntry;
+  entries: Array<{
+    clientName: string;
+    desiredDate: string;
+    durationMin: number;
+    endTime: string;
+    id: string;
+    priority: string;
+    startTime: string;
+    status: string;
+    title: string;
+  }>;
+}) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+      <form action={createAction} className="grid gap-3 md:grid-cols-2">
+        <label className="grid gap-1 md:col-span-2">
+          <span className="label">Cliente</span>
+          <select className="field" name="clientId" required>
+            <option value="">Selecciona un cliente</option>
+            {clients.map((client) => (
+              <option key={client.id} value={client.id}>
+                {client.fullName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-1 md:col-span-2">
+          <span className="label">Motivo</span>
+          <input className="field" minLength={2} name="title" placeholder="Consulta, seguimiento..." required />
+        </label>
+        <label className="grid gap-1">
+          <span className="label">Fecha deseada</span>
+          <input className="field" min={formatInputDate(new Date())} name="desiredDate" required type="date" />
+        </label>
+        <label className="grid gap-1">
+          <span className="label">Duración min.</span>
+          <input className="field" defaultValue="60" max="480" min="15" name="durationMin" required type="number" />
+        </label>
+        <label className="grid gap-1">
+          <span className="label">Desde</span>
+          <input className="field" name="startTime" required type="time" />
+        </label>
+        <label className="grid gap-1">
+          <span className="label">Hasta</span>
+          <input className="field" name="endTime" required type="time" />
+        </label>
+        <label className="grid gap-1 md:col-span-2">
+          <span className="label">Prioridad</span>
+          <select className="field" defaultValue="NORMAL" name="priority">
+            <option value="NORMAL">Normal</option>
+            <option value="HIGH">Alta</option>
+            <option value="LOW">Baja</option>
+          </select>
+        </label>
+        <label className="grid gap-1 md:col-span-2">
+          <span className="label">Notas</span>
+          <textarea className="field min-h-16 resize-y" name="notes" />
+        </label>
+        <button className="primary-button md:col-span-2" disabled={clients.length === 0} type="submit">
+          <Plus size={16} />
+          Agregar a lista
+        </button>
+      </form>
+
+      <div className="overflow-hidden rounded-md border border-black/10">
+        {entries.map((entry) => (
+          <div className="grid gap-2 border-b border-black/10 px-4 py-3 last:border-b-0" key={entry.id}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-semibold">{entry.clientName}</p>
+                <p className="text-sm text-ink/60">{entry.title}</p>
+              </div>
+              <span className={`status-pill ${entry.status === "OFFERED" ? "bg-amber/20 text-ink" : "bg-mint text-leaf"}`}>
+                {getWaitlistStatusLabel(entry.status)}
+              </span>
+            </div>
+            <p className="text-sm text-ink/60">
+              {entry.desiredDate} de {entry.startTime} a {entry.endTime} · {entry.durationMin} min · {getPriorityLabel(entry.priority)}
+            </p>
+            <form action={deleteAction}>
+              <input name="waitlistEntryId" type="hidden" value={entry.id} />
+              <button className="secondary-button text-coral" type="submit">
+                Eliminar
+              </button>
+            </form>
+          </div>
+        ))}
+        {entries.length === 0 ? (
+          <div className="px-4 py-8 text-center text-sm text-ink/60">
+            Sin pacientes en lista de espera.
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -628,6 +891,65 @@ function getSelectedDay(day?: string) {
   }
 
   return formatInputDate(new Date());
+}
+
+function getWeekDays(day: string) {
+  const [year, month, date] = day.split("-").map(Number);
+  const selected = new Date(Date.UTC(year, month - 1, date, 12, 0, 0, 0));
+  const dayOfWeek = selected.getUTCDay();
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const current = new Date(selected);
+    current.setUTCDate(selected.getUTCDate() + mondayOffset + index);
+
+    return [
+      String(current.getUTCFullYear()).padStart(4, "0"),
+      String(current.getUTCMonth() + 1).padStart(2, "0"),
+      String(current.getUTCDate()).padStart(2, "0")
+    ].join("-");
+  });
+}
+
+function getMonthBounds(day: string) {
+  const [year, month] = day.split("-").map(Number);
+  const startMonth = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-01`;
+  const nextMonthDate = new Date(Date.UTC(year, month, 1, 12, 0, 0, 0));
+  const nextMonth = [
+    String(nextMonthDate.getUTCFullYear()).padStart(4, "0"),
+    String(nextMonthDate.getUTCMonth() + 1).padStart(2, "0"),
+    "01"
+  ].join("-");
+
+  return {
+    startOfDay: getClinicDayBounds(startMonth).startOfDay,
+    endOfDay: getClinicDayBounds(nextMonth).startOfDay
+  };
+}
+
+function zonedDayForDisplay(day: string) {
+  return zonedDateTimeToUtc(day, "12:00");
+}
+
+function getWaitlistStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    WAITING: "En espera",
+    OFFERED: "Oferta enviada",
+    BOOKED: "Agendada",
+    CANCELLED: "Cancelada"
+  };
+
+  return labels[status] ?? status;
+}
+
+function getPriorityLabel(priority: string) {
+  const labels: Record<string, string> = {
+    HIGH: "Prioridad alta",
+    LOW: "Prioridad baja",
+    NORMAL: "Prioridad normal"
+  };
+
+  return labels[priority] ?? priority;
 }
 
 function buildHomeHref({

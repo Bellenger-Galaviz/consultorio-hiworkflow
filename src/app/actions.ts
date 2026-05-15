@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db";
 import { sendReminderToN8n } from "@/lib/n8n";
 import { sendAppointmentReminderByType } from "@/lib/reminders";
 import { formatClinicTime, zonedDateTimeToUtc } from "@/lib/timezone";
+import { notifyWaitlistForAvailableSlot } from "@/lib/waitlist";
 
 const clientSchema = z.object({
   fullName: z.string().trim().min(2),
@@ -33,6 +34,21 @@ const crmMessageSchema = z.object({
 
 const deleteClientSchema = z.object({
   clientId: z.string().min(1)
+});
+
+const waitlistSchema = z.object({
+  clientId: z.string().min(1),
+  desiredDate: z.string().min(1),
+  durationMin: z.coerce.number().min(15).max(480),
+  endTime: z.string().min(1),
+  notes: z.string().optional(),
+  priority: z.enum(["LOW", "NORMAL", "HIGH"]).default("NORMAL"),
+  startTime: z.string().min(1),
+  title: z.string().trim().min(2)
+});
+
+const deleteWaitlistSchema = z.object({
+  waitlistEntryId: z.string().min(1)
 });
 
 function goHomeWithError(message: string): never {
@@ -204,6 +220,77 @@ export async function createAppointment(formData: FormData) {
   goHomeWithSuccess("Cita agendada.");
 }
 
+export async function createWaitlistEntry(formData: FormData) {
+  const user = await requireUser();
+  const result = waitlistSchema.safeParse(Object.fromEntries(formData));
+
+  if (!result.success) {
+    goHomeWithError("Completa cliente, motivo, fecha y horario de la lista de espera.");
+  }
+
+  const data = result.data;
+  const startsAt = zonedDateTimeToUtc(data.desiredDate, data.startTime);
+  const endsAt = zonedDateTimeToUtc(data.desiredDate, data.endTime);
+
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || startsAt >= endsAt) {
+    goHomeWithError("El rango de horario de lista de espera no es válido.");
+  }
+
+  if (endsAt <= new Date()) {
+    goHomeWithError("La lista de espera debe ser para una fecha u horario futuro.");
+  }
+
+  const client = await prisma.client.findFirst({
+    where: { id: data.clientId, userId: user.id }
+  });
+
+  if (!client) {
+    goHomeWithError("Selecciona un cliente válido.");
+  }
+
+  await prisma.waitlistEntry.create({
+    data: {
+      userId: user.id,
+      clientId: data.clientId,
+      title: data.title,
+      desiredDate: data.desiredDate,
+      startTime: data.startTime,
+      endTime: data.endTime,
+      durationMin: data.durationMin,
+      priority: data.priority,
+      notes: data.notes || null
+    }
+  });
+
+  revalidatePath("/");
+  goHomeWithSuccess("Cliente agregado a lista de espera.");
+}
+
+export async function deleteWaitlistEntry(formData: FormData) {
+  const user = await requireUser();
+  const result = deleteWaitlistSchema.safeParse(Object.fromEntries(formData));
+
+  if (!result.success) {
+    goHomeWithError("Selecciona una entrada válida de lista de espera.");
+  }
+
+  const deleted = await prisma.waitlistEntry
+    .deleteMany({
+      where: {
+        id: result.data.waitlistEntryId,
+        userId: user.id
+      }
+    })
+    .catch(() => ({ count: 0 }));
+
+  if (deleted.count === 0) {
+    goHomeWithError("No se encontró la entrada de lista de espera.");
+  }
+
+  revalidatePath("/");
+  goHomeWithSuccess("Entrada eliminada de lista de espera.");
+}
+
 export async function updateAppointmentStatus(formData: FormData) {
   const user = await requireUser();
   const id = String(formData.get("id"));
@@ -224,15 +311,24 @@ export async function updateAppointmentStatus(formData: FormData) {
     redirectWithMessage(returnTo, "error", "No se pudo cambiar el estado de la cita.");
   }
 
-  const updated = await prisma.appointment
-    .updateMany({
+  const appointment = await prisma.appointment
+    .findFirst({
       where: { id, userId: user.id },
-      data: { status }
+      include: { client: true }
     })
-    .catch(() => ({ count: 0 }));
+    .catch(() => null);
 
-  if (updated.count === 0) {
+  if (!appointment) {
     redirectWithMessage(returnTo, "error", "No se encontró la cita seleccionada.");
+  }
+
+  await prisma.appointment.update({
+    where: { id: appointment.id },
+    data: { status }
+  });
+
+  if (status === "CANCELLED") {
+    await notifyWaitlistForAvailableSlot({ ...appointment, status: "CANCELLED" });
   }
 
   revalidatePath("/");
