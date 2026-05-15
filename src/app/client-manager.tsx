@@ -20,6 +20,7 @@ export function ClientManager({
   const [search, setSearch] = useState("");
   const filteredClients = useMemo(() => {
     const normalized = normalizeSearch(search);
+    const normalizedPhone = search.replace(/\D/g, "");
 
     if (!normalized) {
       return clients;
@@ -28,7 +29,7 @@ export function ClientManager({
     return clients.filter(
       (client) =>
         normalizeSearch(client.fullName).includes(normalized) ||
-        client.phone.includes(normalized.replace(/\D/g, ""))
+        (normalizedPhone ? client.phone.includes(normalizedPhone) : false)
     );
   }, [clients, search]);
 
@@ -44,6 +45,9 @@ export function ClientManager({
           value={search}
         />
       </label>
+      <p className="text-sm font-semibold text-ink/55">
+        {filteredClients.length} coincidencia{filteredClients.length === 1 ? "" : "s"}
+      </p>
 
       <div className="max-h-72 overflow-y-auto rounded-md border border-black/10">
         {filteredClients.map((client) => (

@@ -362,6 +362,16 @@ export default async function Home({
           </Panel>
         </section>
 
+        <section className="grid gap-5">
+          <Panel title="CRM de WhatsApp" icon={<MessageCircle size={18} />}>
+            <CrmPanel
+              initialMessages={initialCrmMessages}
+              initialSelectedClientId={selectedChatClient?.id ?? null}
+              threads={crmThreads}
+            />
+          </Panel>
+        </section>
+
         <section>
           <Panel title="Clientes" icon={<Users size={18} />}>
             <ClientManager
@@ -371,16 +381,6 @@ export default async function Home({
                 id: client.id,
                 phone: client.phone
               }))}
-            />
-          </Panel>
-        </section>
-
-        <section className="grid gap-5">
-          <Panel title="CRM de WhatsApp" icon={<MessageCircle size={18} />}>
-            <CrmPanel
-              initialMessages={initialCrmMessages}
-              initialSelectedClientId={selectedChatClient?.id ?? null}
-              threads={crmThreads}
             />
           </Panel>
         </section>

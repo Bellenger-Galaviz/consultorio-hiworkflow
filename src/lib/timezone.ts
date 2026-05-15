@@ -1,4 +1,5 @@
-export const APP_TIME_ZONE = process.env.APP_TIME_ZONE ?? "America/Chihuahua";
+export const APP_TIME_ZONE =
+  process.env.NEXT_PUBLIC_APP_TIME_ZONE ?? process.env.APP_TIME_ZONE ?? "America/Mazatlan";
 
 function getParts(date: Date) {
   const parts = new Intl.DateTimeFormat("en-US", {

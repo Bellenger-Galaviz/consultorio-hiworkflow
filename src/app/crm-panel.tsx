@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { APP_TIME_ZONE } from "@/lib/timezone";
 
 export type CrmThread = {
   count: number;
@@ -248,7 +249,7 @@ function formatDateTime(value: string) {
     hour12: false,
     minute: "2-digit",
     month: "2-digit",
-    timeZone: "America/Chihuahua",
+    timeZone: APP_TIME_ZONE,
     year: "numeric"
   }).format(new Date(value));
 }
