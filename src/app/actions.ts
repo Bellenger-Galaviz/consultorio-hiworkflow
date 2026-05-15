@@ -31,6 +31,10 @@ const crmMessageSchema = z.object({
   message: z.string().trim().min(1).max(1000)
 });
 
+const deleteClientSchema = z.object({
+  clientId: z.string().min(1)
+});
+
 function goHomeWithError(message: string): never {
   redirect(`/?error=${encodeURIComponent(message)}`);
 }
@@ -56,6 +60,19 @@ function formatConflictTime(date: Date) {
   return formatClinicTime(date);
 }
 
+function normalizePhone(phone: string) {
+  return phone.replace(/\D/g, "");
+}
+
+function normalizeName(name: string) {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function createClient(formData: FormData) {
   const user = await requireUser();
   const result = clientSchema.safeParse(Object.fromEntries(formData));
@@ -65,13 +82,29 @@ export async function createClient(formData: FormData) {
   }
 
   const data = result.data;
+  const phone = normalizePhone(data.phone);
+  const fullNameKey = normalizeName(data.fullName);
+  const existingClients = await prisma.client.findMany({
+    where: { userId: user.id },
+    select: { fullName: true, phone: true }
+  });
+  const duplicatePhone = existingClients.some((client) => normalizePhone(client.phone) === phone);
+  const duplicateName = existingClients.some((client) => normalizeName(client.fullName) === fullNameKey);
+
+  if (duplicatePhone) {
+    goHomeWithError("Ya existe un cliente con ese número de WhatsApp.");
+  }
+
+  if (duplicateName) {
+    goHomeWithError("Ya existe un cliente con ese nombre.");
+  }
 
   try {
     await prisma.client.create({
       data: {
         userId: user.id,
         fullName: data.fullName,
-        phone: data.phone,
+        phone,
         email: data.email || null,
         notes: data.notes || null
       }
@@ -82,6 +115,31 @@ export async function createClient(formData: FormData) {
 
   revalidatePath("/");
   goHomeWithSuccess("Cliente guardado.");
+}
+
+export async function deleteClient(formData: FormData) {
+  const user = await requireUser();
+  const result = deleteClientSchema.safeParse(Object.fromEntries(formData));
+
+  if (!result.success) {
+    goHomeWithError("Selecciona un cliente válido.");
+  }
+
+  const deleted = await prisma.client
+    .deleteMany({
+      where: {
+        id: result.data.clientId,
+        userId: user.id
+      }
+    })
+    .catch(() => ({ count: 0 }));
+
+  if (deleted.count === 0) {
+    goHomeWithError("No se encontró el cliente seleccionado.");
+  }
+
+  revalidatePath("/");
+  goHomeWithSuccess("Cliente eliminado.");
 }
 
 export async function createAppointment(formData: FormData) {

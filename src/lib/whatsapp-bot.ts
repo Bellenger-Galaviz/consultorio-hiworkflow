@@ -90,6 +90,7 @@ function parseSpanishDateTime(text: string) {
 async function findActiveAppointment(phone: string) {
   const normalized = normalizePhone(phone);
   const now = new Date();
+  const statusFilter = ["PENDING", "CONFIRMED", "REPROGRAM_PENDING", "CANCELLED"];
 
   const clients = await prisma.client.findMany({
     where: {
@@ -101,17 +102,49 @@ async function findActiveAppointment(phone: string) {
       appointments: {
         where: {
           startsAt: { gt: now },
-          status: { in: ["PENDING", "CONFIRMED", "REPROGRAM_PENDING"] }
+          status: { in: statusFilter }
         },
         orderBy: { startsAt: "asc" },
-        take: 1
+        take: 5
       }
     },
     take: 10
   });
 
-  const client = clients.find((item) => item.appointments.length > 0);
-  const appointment = client?.appointments[0];
+  const clientIds = clients.map((client) => client.id);
+  const recentChat = clientIds.length
+    ? await prisma.chatMessage.findFirst({
+        where: {
+          clientId: { in: clientIds },
+          appointment: {
+            is: {
+              startsAt: { gt: now },
+              status: { in: statusFilter }
+            }
+          }
+        },
+        include: {
+          appointment: { include: { client: true } },
+          client: true
+        },
+        orderBy: { createdAt: "desc" }
+      })
+    : null;
+
+  if (recentChat?.appointment) {
+    return {
+      client: recentChat.client,
+      appointment: {
+        ...recentChat.appointment,
+        client: recentChat.client
+      } as AppointmentWithClient
+    };
+  }
+
+  const client = clients.find((item) =>
+    item.appointments.some((appointment) => appointment.status !== "CANCELLED")
+  );
+  const appointment = client?.appointments.find((item) => item.status !== "CANCELLED");
 
   if (!client || !appointment) {
     return null;
@@ -145,6 +178,49 @@ async function reply(appointment: AppointmentWithClient, message: string, intent
   });
 }
 
+async function reprogramAppointment(appointment: AppointmentWithClient, proposedDate: Date) {
+  const conflict = await findAppointmentConflict({
+    userId: appointment.userId,
+    startsAt: proposedDate,
+    durationMin: appointment.durationMin,
+    ignoreAppointmentId: appointment.id
+  });
+
+  if (conflict) {
+    const message =
+      "Ese horario ya está ocupado. Por favor responde con otra fecha y hora en formato DD/MM/AAAA HH:mm.";
+
+    await reply(appointment, message, "REPROGRAM_CONFLICT_REPLY");
+
+    return { ok: true, action: "REPROGRAM_CONFLICT", appointmentId: appointment.id };
+  }
+
+  const updatedAppointment = await prisma.appointment.update({
+    where: { id: appointment.id },
+    data: {
+      previousStartsAt: appointment.previousStartsAt ?? appointment.startsAt,
+      startsAt: proposedDate,
+      status: "PENDING",
+      notes: `${appointment.notes ?? ""}\nReprogramada de ${formatDateTime(appointment.startsAt)} a ${formatDateTime(
+        proposedDate
+      )}.`.trim()
+    },
+    include: { client: true }
+  });
+
+  const message = `Listo ${appointment.client.fullName}, registramos tu nueva cita "${appointment.title}" para ${formatDateTime(
+    proposedDate
+  )}.`;
+
+  await reply(updatedAppointment, message, "REPROGRAM_CONFIRM_REPLY");
+
+  return {
+    ok: true,
+    action: "REPROGRAMMED",
+    appointmentId: appointment.id
+  };
+}
+
 export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   const found = await findActiveAppointment(input.phone);
 
@@ -168,6 +244,41 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
       intent
     }
   });
+
+  const proposedDate = parseSpanishDateTime(input.message);
+
+  if (appointment.status === "CANCELLED") {
+    if (proposedDate) {
+      return reprogramAppointment(appointment, proposedDate);
+    }
+
+    if (intent === "REPROGRAM_REQUEST") {
+      await prisma.appointment.update({
+        where: { id: appointment.id },
+        data: { status: "REPROGRAM_PENDING" }
+      });
+
+      const message = `Claro ${appointment.client.fullName}. Esta cita estaba cancelada; para reprogramarla responde con la nueva fecha y hora en formato DD/MM/AAAA HH:mm, por ejemplo 25/05/2026 16:30.`;
+
+      await reply(appointment, message, "ASK_REPROGRAM_DATE");
+
+      return { ok: true, action: "ASKED_REPROGRAM_DATE", appointmentId: appointment.id };
+    }
+
+    if (intent === "CONFIRM") {
+      const message = `${appointment.client.fullName}, esa cita ya fue cancelada y no se puede volver a activar con CONFIRMO. Responde REPROGRAMAR si quieres agendar una nueva fecha.`;
+
+      await reply(appointment, message, "CANCELLED_CONFIRM_REJECTED");
+
+      return { ok: true, action: "CANCELLED_CONFIRM_REJECTED", appointmentId: appointment.id };
+    }
+
+    const message = `${appointment.client.fullName}, esa cita está cancelada. Responde REPROGRAMAR si quieres agendar una nueva fecha.`;
+
+    await reply(appointment, message, "CANCELLED_FALLBACK_REPLY");
+
+    return { ok: true, action: "CANCELLED_FALLBACK", appointmentId: appointment.id };
+  }
 
   if (intent === "CONFIRM") {
     await prisma.appointment.update({
@@ -198,8 +309,6 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
 
     return { ok: true, action: "CANCELLED", appointmentId: appointment.id };
   }
-
-  const proposedDate = parseSpanishDateTime(input.message);
 
   if (appointment.status === "REPROGRAM_PENDING" && proposedDate) {
     const conflict = await findAppointmentConflict({

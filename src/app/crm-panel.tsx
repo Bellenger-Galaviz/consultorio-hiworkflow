@@ -1,7 +1,6 @@
 "use client";
 
-import { MessageCircle } from "lucide-react";
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 export type CrmThread = {
@@ -33,6 +32,7 @@ export function CrmPanel({
   threads
 }: CrmPanelProps) {
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
   const [, startTransition] = useTransition();
   const [search, setSearch] = useState("");
   const [selectedClientId, setSelectedClientId] = useState(initialSelectedClientId);
@@ -106,6 +106,15 @@ export function CrmPanel({
     } finally {
       setIsSending(false);
     }
+  }
+
+  function submitWithEnter(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    formRef.current?.requestSubmit();
   }
 
   if (threads.length === 0) {
@@ -201,8 +210,9 @@ export function CrmPanel({
           })}
         </div>
 
-        <form className="grid gap-2 border-t border-black/10 p-3" onSubmit={sendMessage}>
+        <form className="grid gap-2 border-t border-black/10 p-3" onSubmit={sendMessage} ref={formRef}>
           {status ? <p className="text-sm font-semibold text-coral">{status}</p> : null}
+          {isSending ? <p className="text-sm font-semibold text-leaf">Enviando...</p> : null}
           <label className="sr-only" htmlFor="crm-message">
             Mensaje
           </label>
@@ -212,18 +222,11 @@ export function CrmPanel({
             id="crm-message"
             maxLength={1000}
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={submitWithEnter}
             placeholder={selectedClient ? `Escribe a ${selectedClient.fullName}` : "Selecciona un cliente"}
             required
             value={draft}
           />
-          <button
-            className="primary-button justify-self-end"
-            disabled={!selectedClient || !draft.trim() || isSending}
-            type="submit"
-          >
-            <MessageCircle size={16} />
-            {isSending ? "Enviando..." : "Enviar WhatsApp"}
-          </button>
         </form>
       </div>
     </div>

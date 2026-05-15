@@ -38,6 +38,7 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
   const slots = useMemo(
     () =>
       buildSlots().map((slot) => {
+        const isPast = isPastSlot(date, slot);
         const conflict = findSlotConflict({
           appointments,
           date,
@@ -47,7 +48,10 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
 
         return {
           conflict,
-          label: conflict
+          disabled: isPast || Boolean(conflict),
+          label: isPast
+            ? `${slot} - hora pasada`
+            : conflict
             ? `${slot} - ocupado con ${conflict.clientName} (${formatClinicTime(new Date(conflict.startsAt))})`
             : slot,
           value: slot
@@ -59,7 +63,7 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
   useEffect(() => {
     const selectedSlot = slots.find((slot) => slot.value === time);
 
-    if (selectedSlot?.conflict) {
+    if (selectedSlot?.disabled) {
       setTime("");
     }
   }, [slots, time]);
@@ -130,7 +134,7 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
         >
           <option value="">Selecciona una hora</option>
           {slots.map((slot) => (
-            <option disabled={Boolean(slot.conflict)} key={slot.value} value={slot.value}>
+            <option disabled={slot.disabled} key={slot.value} value={slot.value}>
               {slot.label}
             </option>
           ))}
@@ -148,6 +152,10 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
       </button>
     </form>
   );
+}
+
+function isPastSlot(date: string, time: string) {
+  return zonedDateTimeToUtc(date, time) <= new Date();
 }
 
 function findSlotConflict({

@@ -15,11 +15,13 @@ import { formatInputDate, getClinicDayBounds } from "@/lib/timezone";
 import {
   createAppointment,
   createClient,
+  deleteClient,
   sendAppointmentReminder,
   updateAppointmentStatus
 } from "./actions";
 import { AppointmentForm } from "./appointment-form";
 import { logoutDoctor } from "./auth-actions";
+import { ClientManager } from "./client-manager";
 import { CrmPanel } from "./crm-panel";
 
 export const dynamic = "force-dynamic";
@@ -355,6 +357,19 @@ export default async function Home({
               clients={clients.map((client) => ({
                 fullName: client.fullName,
                 id: client.id
+              }))}
+            />
+          </Panel>
+        </section>
+
+        <section>
+          <Panel title="Clientes" icon={<Users size={18} />}>
+            <ClientManager
+              action={deleteClient}
+              clients={clients.map((client) => ({
+                fullName: client.fullName,
+                id: client.id,
+                phone: client.phone
               }))}
             />
           </Panel>
