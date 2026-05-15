@@ -6,6 +6,7 @@ import { z } from "zod";
 import { findAppointmentConflict } from "@/lib/appointments";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { sendReminderToN8n } from "@/lib/n8n";
 import { sendAppointmentReminderByType } from "@/lib/reminders";
 
 const clientSchema = z.object({
@@ -24,12 +25,30 @@ const appointmentSchema = z.object({
   notes: z.string().optional()
 });
 
+const crmMessageSchema = z.object({
+  clientId: z.string().min(1),
+  message: z.string().trim().min(1).max(1000)
+});
+
 function goHomeWithError(message: string): never {
   redirect(`/?error=${encodeURIComponent(message)}`);
 }
 
 function goHomeWithSuccess(message: string): never {
   redirect(`/?success=${encodeURIComponent(message)}`);
+}
+
+function redirectWithMessage(returnTo: string, type: "error" | "success", message: string): never {
+  const url = new URL(returnTo.startsWith("/") ? returnTo : "/", "https://consultorio.local");
+
+  url.searchParams.set(type, message);
+  redirect(`${url.pathname}${url.search}`);
+}
+
+function getReturnTo(formData: FormData) {
+  const value = String(formData.get("returnTo") ?? "/");
+
+  return value.startsWith("/") ? value : "/";
 }
 
 function parseDateOrNull(value: string) {
@@ -138,6 +157,7 @@ export async function createAppointment(formData: FormData) {
 export async function updateAppointmentStatus(formData: FormData) {
   const user = await requireUser();
   const id = String(formData.get("id"));
+  const returnTo = getReturnTo(formData);
   const status = String(formData.get("status"));
 
   const allowedStatuses = [
@@ -151,7 +171,7 @@ export async function updateAppointmentStatus(formData: FormData) {
   ];
 
   if (!id || !allowedStatuses.includes(status)) {
-    goHomeWithError("No se pudo cambiar el estado de la cita.");
+    redirectWithMessage(returnTo, "error", "No se pudo cambiar el estado de la cita.");
   }
 
   const updated = await prisma.appointment
@@ -162,16 +182,17 @@ export async function updateAppointmentStatus(formData: FormData) {
     .catch(() => ({ count: 0 }));
 
   if (updated.count === 0) {
-    goHomeWithError("No se encontró la cita seleccionada.");
+    redirectWithMessage(returnTo, "error", "No se encontró la cita seleccionada.");
   }
 
   revalidatePath("/");
-  goHomeWithSuccess("Estado de cita actualizado.");
+  redirectWithMessage(returnTo, "success", "Estado de cita actualizado.");
 }
 
 export async function sendAppointmentReminder(formData: FormData) {
   const user = await requireUser();
   const appointmentId = String(formData.get("appointmentId"));
+  const returnTo = getReturnTo(formData);
 
   const appointment = await prisma.appointment
     .findFirst({
@@ -181,16 +202,64 @@ export async function sendAppointmentReminder(formData: FormData) {
     .catch(() => null);
 
   if (!appointment) {
-    goHomeWithError("No se encontró la cita seleccionada.");
+    redirectWithMessage(returnTo, "error", "No se encontró la cita seleccionada.");
   }
 
   try {
     await sendAppointmentReminderByType(appointment, "MANUAL");
   } catch {
     revalidatePath("/");
-    goHomeWithError("No se pudo enviar WhatsApp. Revisa n8n o Evolution API.");
+    redirectWithMessage(returnTo, "error", "No se pudo enviar WhatsApp. Revisa n8n o Evolution API.");
   }
 
   revalidatePath("/");
-  goHomeWithSuccess("Recordatorio enviado por WhatsApp.");
+  redirectWithMessage(returnTo, "success", "Recordatorio enviado por WhatsApp.");
+}
+
+export async function sendClientWhatsappMessage(formData: FormData) {
+  const user = await requireUser();
+  const returnTo = getReturnTo(formData);
+  const result = crmMessageSchema.safeParse(Object.fromEntries(formData));
+
+  if (!result.success) {
+    redirectWithMessage(returnTo, "error", "Escribe un mensaje antes de enviarlo.");
+  }
+
+  const client = await prisma.client
+    .findFirst({
+      where: {
+        id: result.data.clientId,
+        userId: user.id
+      }
+    })
+    .catch(() => null);
+
+  if (!client) {
+    redirectWithMessage(returnTo, "error", "No se encontró el cliente seleccionado.");
+  }
+
+  try {
+    await sendReminderToN8n({
+      client,
+      appointment: null,
+      event: "client.whatsapp.manual.requested",
+      message: result.data.message
+    });
+
+    await prisma.chatMessage.create({
+      data: {
+        userId: user.id,
+        clientId: client.id,
+        direction: "OUTBOUND",
+        message: result.data.message,
+        intent: "MANUAL_CRM"
+      }
+    });
+  } catch {
+    revalidatePath("/");
+    redirectWithMessage(returnTo, "error", "No se pudo enviar el mensaje. Revisa n8n o Evolution API.");
+  }
+
+  revalidatePath("/");
+  redirectWithMessage(returnTo, "success", "Mensaje enviado por WhatsApp.");
 }

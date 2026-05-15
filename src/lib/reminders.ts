@@ -65,6 +65,17 @@ export async function sendAppointmentReminderByType(
       }
     });
 
+    await prisma.chatMessage.create({
+      data: {
+        userId: appointment.userId,
+        clientId: appointment.clientId,
+        appointmentId: appointment.id,
+        direction: "OUTBOUND",
+        message,
+        intent: type
+      }
+    });
+
     return { skipped: false, logId: log.id };
   } catch (error) {
     const log = await prisma.reminderLog.create({

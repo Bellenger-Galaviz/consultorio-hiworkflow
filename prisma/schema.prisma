@@ -31,6 +31,7 @@ model Appointment {
   clientId    String
   title       String
   startsAt    DateTime
+  previousStartsAt DateTime?
   durationMin Int           @default(60)
   status      String        @default("PENDING")
   notes       String?

@@ -2,7 +2,8 @@ import type { Appointment, Client } from "@prisma/client";
 
 type ReminderPayload = {
   client: Client;
-  appointment: Appointment;
+  appointment?: Appointment | null;
+  event?: string;
   message: string;
 };
 
@@ -20,7 +21,7 @@ export async function sendReminderToN8n(payload: ReminderPayload) {
       "x-webhook-secret": process.env.N8N_WEBHOOK_SECRET ?? ""
     },
     body: JSON.stringify({
-      event: "appointment.reminder.requested",
+      event: payload.event ?? "appointment.reminder.requested",
       sentFrom: process.env.APP_PUBLIC_URL ?? "http://localhost:3000",
       client: {
         id: payload.client.id,
@@ -28,16 +29,19 @@ export async function sendReminderToN8n(payload: ReminderPayload) {
         phone: payload.client.phone,
         email: payload.client.email
       },
-      appointment: {
-        id: payload.appointment.id,
-        title: payload.appointment.title,
-        startsAt: payload.appointment.startsAt,
-        durationMin: payload.appointment.durationMin,
-        status: payload.appointment.status
-      },
+      appointment: payload.appointment
+        ? {
+            id: payload.appointment.id,
+            title: payload.appointment.title,
+            startsAt: payload.appointment.startsAt,
+            durationMin: payload.appointment.durationMin,
+            status: payload.appointment.status
+          }
+        : null,
       whatsapp: {
         to: payload.client.phone,
-        message: payload.message
+        message: payload.message,
+        text: payload.message
       }
     })
   });

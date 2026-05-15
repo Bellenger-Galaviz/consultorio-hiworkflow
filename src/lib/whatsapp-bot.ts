@@ -28,16 +28,20 @@ function normalizeText(text: string) {
 function detectIntent(text: string) {
   const normalized = normalizeText(text);
 
-  if (/\b(confirmo|confirmar|si|ok|asisto|voy)\b/.test(normalized)) {
-    return "CONFIRM";
-  }
-
-  if (/\b(cancelar|cancelo|cancelada|cancelado)\b/.test(normalized)) {
+  if (
+    /\b(cancelar|cancelo|cancelada|cancelado|no voy|no asistire|no podre|no puedo asistir)\b/.test(
+      normalized
+    )
+  ) {
     return "CANCEL";
   }
 
   if (/\b(reprogramar|cambiar|mover|posponer|pospongo|no puedo)\b/.test(normalized)) {
     return "REPROGRAM_REQUEST";
+  }
+
+  if (/\b(confirmo|confirmar|si|ok|asisto|voy)\b/.test(normalized)) {
+    return "CONFIRM";
   }
 
   return "UNKNOWN";
@@ -210,38 +214,29 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
       return { ok: true, action: "REPROGRAM_CONFLICT", appointmentId: appointment.id };
     }
 
-    const newAppointment = await prisma.appointment.create({
-      data: {
-        userId: appointment.userId,
-        clientId: appointment.clientId,
-        title: appointment.title,
-        startsAt: proposedDate,
-        durationMin: appointment.durationMin,
-        status: "PENDING",
-        notes: `Reprogramada desde cita ${appointment.id}.`
-      },
-      include: { client: true }
-    });
-
-    await prisma.appointment.update({
+    const updatedAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
       data: {
-        status: "REPROGRAMMED",
-        notes: `${appointment.notes ?? ""}\nReprogramada para ${formatDateTime(proposedDate)}. Nueva cita: ${newAppointment.id}`.trim()
-      }
+        previousStartsAt: appointment.previousStartsAt ?? appointment.startsAt,
+        startsAt: proposedDate,
+        status: "PENDING",
+        notes: `${appointment.notes ?? ""}\nReprogramada de ${formatDateTime(appointment.startsAt)} a ${formatDateTime(
+          proposedDate
+        )}.`.trim()
+      },
+      include: { client: true }
     });
 
     const message = `Listo ${appointment.client.fullName}, registramos tu nueva cita "${appointment.title}" para ${formatDateTime(
       proposedDate
     )}.`;
 
-    await reply(newAppointment, message, "REPROGRAM_CONFIRM_REPLY");
+    await reply(updatedAppointment, message, "REPROGRAM_CONFIRM_REPLY");
 
     return {
       ok: true,
       action: "REPROGRAMMED",
-      oldAppointmentId: appointment.id,
-      newAppointmentId: newAppointment.id
+      appointmentId: appointment.id
     };
   }
 
