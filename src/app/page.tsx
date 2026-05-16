@@ -7,6 +7,7 @@ import {
   UserPlus,
   Users
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
@@ -20,6 +21,7 @@ import {
   deleteWaitlistEntry,
   offerWaitlistSlot,
   sendAppointmentReminder,
+  updateClient,
   updateAppointmentStatus
 } from "./actions";
 import { AppointmentForm } from "./appointment-form";
@@ -27,7 +29,7 @@ import { logoutDoctor } from "./auth-actions";
 import { ClientManager } from "./client-manager";
 import { ConfirmSubmitButton } from "./confirm-submit-button";
 import { CrmPanel } from "./crm-panel";
-import { MetricsControls } from "./metrics-controls";
+import { MetricsPanel } from "./metrics-panel";
 import { NotificationsMenu } from "./notifications-menu";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -53,10 +55,6 @@ export default async function Home({
     chatSearch?: string;
     day?: string;
     error?: string;
-    metricDay?: string;
-    metricMonth?: string;
-    metricView?: string;
-    metricYear?: string;
     success?: string;
   }>;
 }) {
@@ -69,16 +67,6 @@ export default async function Home({
   const { startOfDay: startOfWeek } = getClinicDayBounds(weekDays[0]);
   const { endOfDay: endOfWeek } = getClinicDayBounds(weekDays[6]);
   const todayStart = getClinicDayBounds(formatInputDate(new Date())).startOfDay;
-  const metricView = getMetricView(params.metricView);
-  const metricDay = getSelectedDay(params.metricDay ?? selectedDay);
-  const metricMonth = getSelectedMonth(params.metricMonth ?? selectedDay.slice(0, 7));
-  const metricYear = getSelectedYear(params.metricYear ?? selectedDay.slice(0, 4));
-  const { start: metricStart, end: metricEnd } = getMetricBounds({
-    day: metricDay,
-    month: metricMonth,
-    view: metricView,
-    year: metricYear
-  });
 
   const [
     clients,
@@ -86,7 +74,7 @@ export default async function Home({
     blockingAppointments,
     chatThreads,
     weekAppointments,
-    metricAppointments,
+    metricsAppointments,
     waitlistEntries,
     waitlistOpportunities,
     notifications
@@ -142,13 +130,15 @@ export default async function Home({
     prisma.appointment.findMany({
       where: {
         userId: user.id,
-        startsAt: {
-          gte: metricStart,
-          lt: metricEnd
-        },
         NOT: { status: "REPROGRAMMED" }
       },
-      include: { client: true }
+      select: {
+        clientId: true,
+        id: true,
+        previousStartsAt: true,
+        startsAt: true,
+        status: true
+      }
     }),
     prisma.waitlistEntry.findMany({
       where: {
@@ -259,35 +249,30 @@ export default async function Home({
     chatSearch: params.chatSearch,
     day: params.day ? selectedDay : undefined
   });
-  const metricStats = {
-    total: metricAppointments.length,
-    confirmed: metricAppointments.filter((item) => item.status === "CONFIRMED").length,
-    pending: metricAppointments.filter((item) => item.status === "PENDING").length,
-    attended: metricAppointments.filter((item) => item.status === "ATTENDED").length,
-    missed: metricAppointments.filter((item) => item.status === "MISSED").length,
-    cancelled: metricAppointments.filter((item) => item.status === "CANCELLED").length,
-    reprogrammed: metricAppointments.filter(
-      (item) => item.status === "REPROGRAM_PENDING" || item.previousStartsAt
-    ).length,
-    activeClients: new Set(metricAppointments.map((item) => item.clientId)).size
-  };
-  const attendanceRate =
-    metricStats.attended + metricStats.missed > 0
-      ? Math.round((metricStats.attended / (metricStats.attended + metricStats.missed)) * 100)
-      : 0;
-  const metricTitle = getMetricTitle({ day: metricDay, month: metricMonth, view: metricView, year: metricYear });
 
   return (
     <main className="min-h-screen">
       <header className="border-b border-black/10 bg-white">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-5 py-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-wide text-leaf">
-              Panel administrativo de {user.name}
-            </p>
-            <h1 className="text-2xl font-bold text-ink md:text-3xl">
-              Control de citas, asistencias y recordatorios
-            </h1>
+          <div className="flex items-center gap-4">
+            <div className="hidden h-14 w-36 items-center justify-center rounded-md bg-black px-3 py-2 sm:flex">
+              <Image
+                alt="HiWorkflow"
+                className="h-auto w-full object-contain"
+                height={72}
+                priority
+                src="/hiworkflow-logo.png"
+                width={220}
+              />
+            </div>
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-wide text-leaf">
+                Panel administrativo de {user.name}
+              </p>
+              <h1 className="text-2xl font-bold text-ink md:text-3xl">
+                Control de citas, asistencias y recordatorios
+              </h1>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm text-ink/70">
             <NotificationsMenu
@@ -317,24 +302,6 @@ export default async function Home({
 
       <div className="mx-auto grid max-w-7xl gap-5 px-5 py-6">
         <FlashMessage error={params.error} success={params.success} />
-
-        <Panel title="Resumen y métricas" icon={<CalendarClock size={18} />}>
-          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <p className="text-sm font-semibold text-ink/60">{metricTitle}</p>
-            <MetricsControls day={metricDay} month={metricMonth} view={metricView} year={metricYear} />
-          </div>
-
-          <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-8">
-            <Metric icon={<CalendarClock size={20} />} label="Citas" value={metricStats.total} />
-            <Metric icon={<CalendarClock size={20} />} label="Confirmadas" value={metricStats.confirmed} />
-            <Metric icon={<CalendarClock size={20} />} label="Pendientes" value={metricStats.pending} />
-            <Metric icon={<CalendarClock size={20} />} label="Canceladas" value={metricStats.cancelled} />
-            <Metric icon={<CalendarClock size={20} />} label="Pospuestas" value={metricStats.reprogrammed} />
-            <Metric icon={<CalendarClock size={20} />} label="Asistencia" value={`${attendanceRate}%`} />
-            <Metric icon={<CalendarClock size={20} />} label="No asistieron" value={metricStats.missed} />
-            <Metric icon={<Users size={20} />} label="Pacientes activos" value={metricStats.activeClients} />
-          </section>
-        </Panel>
 
         <Panel title="Calendario semanal" icon={<CalendarClock size={18} />}>
           <WeeklyCalendar
@@ -528,40 +495,37 @@ export default async function Home({
           </Panel>
         </section>
 
+        <Panel title="Resumen y métricas" icon={<CalendarClock size={18} />}>
+          <MetricsPanel
+            appointments={metricsAppointments.map((appointment) => ({
+              clientId: appointment.clientId,
+              previousStartsAt: appointment.previousStartsAt?.toISOString() ?? null,
+              startsAt: appointment.startsAt.toISOString(),
+              status: appointment.status
+            }))}
+            initialDay={selectedDay}
+            initialMonth={selectedDay.slice(0, 7)}
+            initialYear={selectedDay.slice(0, 4)}
+          />
+        </Panel>
+
         <section>
           <Panel title="Clientes" icon={<Users size={18} />}>
             <ClientManager
-              action={deleteClient}
+              deleteAction={deleteClient}
               clients={clients.map((client) => ({
+                email: client.email,
                 fullName: client.fullName,
                 id: client.id,
+                notes: client.notes,
                 phone: client.phone
               }))}
+              updateAction={updateClient}
             />
           </Panel>
         </section>
       </div>
     </main>
-  );
-}
-
-function Metric({
-  icon,
-  label,
-  value
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number | string;
-}) {
-  return (
-    <div className="rounded-md border border-black/10 bg-white p-4">
-      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-md bg-mint text-leaf">
-        {icon}
-      </div>
-      <p className="text-sm font-semibold text-ink/60">{label}</p>
-      <p className="text-3xl font-bold">{value}</p>
-    </div>
   );
 }
 

@@ -37,6 +37,10 @@ const deleteClientSchema = z.object({
   clientId: z.string().min(1)
 });
 
+const updateClientSchema = clientSchema.extend({
+  clientId: z.string().min(1)
+});
+
 const waitlistSchema = z.object({
   clientId: z.string().min(1),
   desiredDate: z.string().min(1),
@@ -164,6 +168,57 @@ export async function deleteClient(formData: FormData) {
 
   revalidatePath("/");
   goHomeWithSuccess("Cliente eliminado.");
+}
+
+export async function updateClient(formData: FormData) {
+  const user = await requireUser();
+  const result = updateClientSchema.safeParse(Object.fromEntries(formData));
+
+  if (!result.success) {
+    goHomeWithError("Revisa el nombre, WhatsApp y correo del cliente.");
+  }
+
+  const data = result.data;
+  const phone = normalizePhone(data.phone);
+  const fullNameKey = normalizeName(data.fullName);
+  const client = await prisma.client.findFirst({
+    where: { id: data.clientId, userId: user.id }
+  });
+
+  if (!client) {
+    goHomeWithError("No se encontró el cliente seleccionado.");
+  }
+
+  const existingClients = await prisma.client.findMany({
+    where: {
+      userId: user.id,
+      NOT: { id: data.clientId }
+    },
+    select: { fullName: true, phone: true }
+  });
+  const duplicatePhone = existingClients.some((item) => normalizePhone(item.phone) === phone);
+  const duplicateName = existingClients.some((item) => normalizeName(item.fullName) === fullNameKey);
+
+  if (duplicatePhone) {
+    goHomeWithError("Ya existe otro cliente con ese número de WhatsApp.");
+  }
+
+  if (duplicateName) {
+    goHomeWithError("Ya existe otro cliente con ese nombre.");
+  }
+
+  await prisma.client.update({
+    where: { id: client.id },
+    data: {
+      fullName: data.fullName,
+      phone,
+      email: data.email || null,
+      notes: data.notes || null
+    }
+  });
+
+  revalidatePath("/");
+  goHomeWithSuccess("Cliente actualizado.");
 }
 
 export async function createAppointment(formData: FormData) {

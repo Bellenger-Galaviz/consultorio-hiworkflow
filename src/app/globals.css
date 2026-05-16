@@ -21,8 +21,8 @@ body {
 }
 
 .dark body {
-  background: #101512;
-  color: #ecf4ef;
+  background: #0d1410;
+  color: #eef7f1;
 }
 
 button,
@@ -57,27 +57,111 @@ textarea {
 }
 
 .dark .bg-white {
-  background-color: #17201b;
+  background-color: #142019;
 }
 
 .dark .bg-paper {
-  background-color: #101512;
+  background-color: #0d1410;
 }
 
 .dark .bg-ink {
-  background-color: #ecf4ef;
+  background-color: #07110d;
 }
 
 .dark .text-ink {
-  color: #ecf4ef;
+  color: #eef7f1;
 }
 
 .dark .text-white {
-  color: #17201b;
+  color: #ffffff;
+}
+
+.dark .text-leaf {
+  color: #81d8ad;
+}
+
+.dark .text-coral {
+  color: #ff947f;
+}
+
+.dark .text-ink\/70 {
+  color: rgba(238, 247, 241, 0.78);
+}
+
+.dark .text-ink\/65 {
+  color: rgba(238, 247, 241, 0.72);
+}
+
+.dark .text-ink\/60 {
+  color: rgba(238, 247, 241, 0.68);
+}
+
+.dark .text-ink\/55 {
+  color: rgba(238, 247, 241, 0.62);
+}
+
+.dark .text-ink\/50 {
+  color: rgba(238, 247, 241, 0.56);
+}
+
+.dark .text-ink\/45 {
+  color: rgba(238, 247, 241, 0.5);
+}
+
+.dark .text-white\/75 {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.dark .text-white\/70 {
+  color: rgba(255, 255, 255, 0.74);
+}
+
+.dark .bg-mint {
+  background-color: #193326;
+}
+
+.dark .bg-mint\/60 {
+  background-color: rgba(45, 112, 79, 0.42);
+}
+
+.dark .bg-amber\/20 {
+  background-color: rgba(247, 182, 92, 0.2);
+}
+
+.dark .bg-coral\/10 {
+  background-color: rgba(239, 91, 76, 0.16);
+}
+
+.dark .bg-coral\/15 {
+  background-color: rgba(239, 91, 76, 0.22);
+}
+
+.dark .bg-ink\/10 {
+  background-color: rgba(238, 247, 241, 0.1);
+}
+
+.dark .bg-leaf {
+  background-color: #2f7a59;
+}
+
+.dark .hover\:bg-paper:hover {
+  background-color: #101a14;
 }
 
 .dark .border-black\/10 {
   border-color: rgba(236, 244, 239, 0.14);
+}
+
+.dark .border-leaf {
+  border-color: #66c997;
+}
+
+.dark .border-leaf\/20 {
+  border-color: rgba(129, 216, 173, 0.28);
+}
+
+.dark .border-coral\/30 {
+  border-color: rgba(255, 148, 127, 0.42);
 }
 
 .dark .divide-black\/10 > :not([hidden]) ~ :not([hidden]) {
@@ -89,13 +173,46 @@ textarea {
 }
 
 .dark .field {
-  background-color: #101512;
-  color: #ecf4ef;
-  border-color: rgba(236, 244, 239, 0.18);
+  background-color: #0d1410;
+  color: #eef7f1;
+  border-color: rgba(236, 244, 239, 0.2);
 }
 
 .dark .field::placeholder {
   color: rgba(236, 244, 239, 0.45);
+}
+
+.dark .icon-button,
+.dark .secondary-button {
+  background-color: #101a14;
+  color: #eef7f1;
+  border-color: rgba(236, 244, 239, 0.18);
+}
+
+.dark .icon-button:hover,
+.dark .secondary-button:hover {
+  border-color: #66c997;
+  color: #81d8ad;
+}
+
+.dark .primary-button {
+  background-color: #2f7a59;
+  color: #ffffff;
+}
+
+.dark .primary-button:hover {
+  background-color: #3f9a70;
+}
+
+.dark input[type="date"]::-webkit-calendar-picker-indicator,
+.dark input[type="month"]::-webkit-calendar-picker-indicator,
+.dark input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.4);
+}
+
+.dark option {
+  background-color: #0d1410;
+  color: #eef7f1;
 }
 
 .notification-pulse {

@@ -1,4 +1,5 @@
 import { CalendarClock, LogIn, UserPlus } from "lucide-react";
+import Image from "next/image";
 import { loginDoctor, registerDoctor } from "../auth-actions";
 
 export default async function LoginPage({
@@ -13,7 +14,17 @@ export default async function LoginPage({
       <div className="w-full max-w-5xl overflow-hidden rounded-md border border-black/10 bg-white shadow-soft">
         <div className="grid lg:grid-cols-[0.9fr_1.1fr]">
           <section className="bg-ink p-8 text-white">
-            <div className="mb-8 flex h-12 w-12 items-center justify-center rounded-md bg-mint text-leaf">
+            <div className="mb-8 rounded-md bg-black px-4 py-5">
+              <Image
+                alt="HiWorkflow"
+                className="h-auto w-full max-w-sm object-contain"
+                height={220}
+                priority
+                src="/hiworkflow-logo.png"
+                width={420}
+              />
+            </div>
+            <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-md bg-mint text-leaf">
               <CalendarClock size={26} />
             </div>
             <h1 className="text-3xl font-bold">Sistema para doctores</h1>
