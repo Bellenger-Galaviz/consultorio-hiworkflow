@@ -1,12 +1,11 @@
 import { LogIn, UserPlus } from "lucide-react";
 import Image from "next/image";
-import Link from "next/link";
 import { loginDoctor, registerDoctor } from "../auth-actions";
 
 export default async function LoginPage({
   searchParams
 }: {
-  searchParams: Promise<{ error?: string; success?: string }>;
+  searchParams: Promise<{ error?: string }>;
 }) {
   const params = await searchParams;
 
@@ -36,7 +35,7 @@ export default async function LoginPage({
           </div>
 
           <div className="auth-notice-slot">
-            <Notice error={params.error} success={params.success} />
+            <Notice error={params.error} />
           </div>
 
           <div className="auth-forms">
@@ -58,9 +57,6 @@ export default async function LoginPage({
                   <LogIn size={16} />
                   Entrar
                 </button>
-                <Link className="auth-link" href="/recuperar">
-                  Olvidé mi contraseña
-                </Link>
               </form>
             </div>
 
@@ -95,7 +91,7 @@ export default async function LoginPage({
   );
 }
 
-function Notice({ error, success }: { error?: string; success?: string }) {
+function Notice({ error }: { error?: string }) {
   const errorMessage =
     error === "exists"
       ? "Ese correo ya tiene una cuenta."
@@ -104,8 +100,7 @@ function Notice({ error, success }: { error?: string; success?: string }) {
         : error
           ? "Correo o contraseña incorrectos."
           : null;
-  const successMessage = success === "password-reset" ? "Contraseña actualizada. Ya puedes iniciar sesión." : null;
-  const message = errorMessage ?? successMessage;
+  const message = errorMessage;
 
   if (!message) {
     return null;

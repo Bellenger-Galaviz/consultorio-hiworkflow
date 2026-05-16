@@ -169,7 +169,6 @@ model User {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   sessions     Session[]
-  passwordResetTokens PasswordResetToken[]
   clients      Client[]
   appointments Appointment[]
   attendances  Attendance[]
@@ -178,19 +177,6 @@ model User {
   waitlistEntries WaitlistEntry[]
   waitlistOpportunities WaitlistOpportunity[]
   notifications Notification[]
-}
-
-model PasswordResetToken {
-  id        String   @id @default(cuid())
-  userId    String
-  tokenHash String   @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([expiresAt])
 }
 
 model Session {
