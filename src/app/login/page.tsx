@@ -12,27 +12,31 @@ export default async function LoginPage({
   return (
     <main className="grid min-h-screen place-items-center bg-paper px-5 py-8">
       <div className="w-full max-w-6xl overflow-hidden rounded-md border border-black/10 bg-white shadow-soft">
-        <div className="grid lg:grid-cols-[0.95fr_1.15fr]">
-          <section className="grid min-h-80 place-items-center bg-black p-8 lg:min-h-[560px] lg:p-10">
-            <Image
-              alt="HiWorkflow"
-              className="h-auto w-full max-w-lg object-contain"
-              height={280}
-              priority
-              src="/hiworkflow-logo-wide.png"
-              width={620}
-            />
+        <div className="grid lg:grid-cols-[0.95fr_1.05fr]">
+          <section className="login-stage grid min-h-[430px] place-items-center overflow-hidden p-8 lg:min-h-[610px] lg:p-10">
+            <div className="login-orbit" aria-label="HiWorkflow">
+              <span className="login-orbit-line" />
+              <span className="login-orbit-line" />
+              <span className="login-orbit-line" />
+              <div className="login-logo-core">
+                <Image
+                  alt="HiWorkflow"
+                  className="h-auto w-full object-contain"
+                  height={260}
+                  priority
+                  src="/hiworkflow-logo-wide.png"
+                  width={620}
+                />
+              </div>
+            </div>
           </section>
 
           <section className="grid content-center gap-8 p-6 md:p-8 lg:p-10">
             <ErrorMessage error={params.error} />
 
-            <div className="max-w-2xl">
+            <div>
               <p className="text-sm font-semibold uppercase tracking-wide text-leaf">Acceso seguro</p>
               <h1 className="mt-2 text-3xl font-bold text-ink">Entra o crea tu cuenta</h1>
-              <p className="mt-2 text-sm leading-6 text-ink/60">
-                Cada doctor trabaja con sus propios pacientes, citas y mensajes.
-              </p>
             </div>
 
             <div className="grid gap-8 md:grid-cols-2">
