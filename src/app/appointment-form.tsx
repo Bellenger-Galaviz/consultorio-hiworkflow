@@ -2,7 +2,7 @@
 
 import { Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { formatClinicTime, formatInputDate, zonedDateTimeToUtc } from "@/lib/timezone";
+import { formatInputDate, formatInputTime, zonedDateTimeToUtc } from "@/lib/timezone";
 import type { createAppointment } from "./actions";
 
 type ClientOption = {
@@ -52,7 +52,9 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
           label: isPast
             ? `${slot} - hora pasada`
             : conflict
-            ? `${slot} - ocupado con ${conflict.clientName} (${formatClinicTime(new Date(conflict.startsAt))})`
+            ? `${slot} - empalma ${formatSlotRange(slot, duration)} con ${conflict.clientName} (${formatAppointmentRange(
+                conflict
+              )})`
             : slot,
           value: slot
         };
@@ -152,6 +154,20 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
       </button>
     </form>
   );
+}
+
+function formatSlotRange(time: string, duration: number) {
+  const start = zonedDateTimeToUtc("2000-01-01", time);
+  const end = new Date(start.getTime() + duration * 60 * 1000);
+
+  return `${time}-${formatInputTime(end)}`;
+}
+
+function formatAppointmentRange(appointment: BlockingAppointment) {
+  const startsAt = new Date(appointment.startsAt);
+  const endsAt = new Date(startsAt.getTime() + appointment.durationMin * 60 * 1000);
+
+  return `${formatInputTime(startsAt)}-${formatInputTime(endsAt)}`;
 }
 
 function isPastSlot(date: string, time: string) {

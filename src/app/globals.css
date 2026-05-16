@@ -16,6 +16,15 @@ body {
   color: #17201b;
 }
 
+.dark {
+  color-scheme: dark;
+}
+
+.dark body {
+  background: #101512;
+  color: #ecf4ef;
+}
+
 button,
 input,
 select,
@@ -45,6 +54,48 @@ textarea {
 
 .status-pill {
   @apply inline-flex items-center rounded-full px-2 py-1 text-xs font-semibold;
+}
+
+.dark .bg-white {
+  background-color: #17201b;
+}
+
+.dark .bg-paper {
+  background-color: #101512;
+}
+
+.dark .bg-ink {
+  background-color: #ecf4ef;
+}
+
+.dark .text-ink {
+  color: #ecf4ef;
+}
+
+.dark .text-white {
+  color: #17201b;
+}
+
+.dark .border-black\/10 {
+  border-color: rgba(236, 244, 239, 0.14);
+}
+
+.dark .divide-black\/10 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(236, 244, 239, 0.14);
+}
+
+.dark .shadow-soft {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+}
+
+.dark .field {
+  background-color: #101512;
+  color: #ecf4ef;
+  border-color: rgba(236, 244, 239, 0.18);
+}
+
+.dark .field::placeholder {
+  color: rgba(236, 244, 239, 0.45);
 }
 
 .notification-pulse {

@@ -64,11 +64,8 @@ export function NotificationsMenu({ initialNotifications }: NotificationsMenuPro
     };
   }, []);
 
-  async function openNotifications() {
-    const nextOpen = !isOpen;
-    setIsOpen(nextOpen);
-
-    if (!nextOpen || unreadCount === 0) {
+  async function markAsRead() {
+    if (unreadCount === 0) {
       return;
     }
 
@@ -83,12 +80,36 @@ export function NotificationsMenu({ initialNotifications }: NotificationsMenuPro
     }
   }
 
+  async function openNotifications() {
+    const nextOpen = !isOpen;
+
+    setIsOpen(nextOpen);
+
+    if (nextOpen) {
+      document.getElementById("notificaciones")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }
+
+    if (nextOpen && unreadCount > 0) {
+      await markAsRead();
+    }
+  }
+
   return (
-    <div className="relative">
+    <div className="relative scroll-mt-4" id="notificaciones">
       {unreadCount > 0 ? (
         <button
           className="notification-beacon"
-          onClick={openNotifications}
+          onClick={() => {
+            setIsOpen(true);
+            document.getElementById("notificaciones")?.scrollIntoView({
+              behavior: "smooth",
+              block: "start"
+            });
+            void markAsRead();
+          }}
           type="button"
         >
           <Bell size={16} />

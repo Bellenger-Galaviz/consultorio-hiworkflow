@@ -97,7 +97,7 @@ export function formatClinicDateTime(date: Date) {
 export function formatClinicTime(date: Date) {
   return new Intl.DateTimeFormat("es-MX", {
     hour: "2-digit",
-    hour12: true,
+    hour12: false,
     minute: "2-digit",
     timeZone: APP_TIME_ZONE
   }).format(date);

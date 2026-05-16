@@ -11,7 +11,7 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDate, formatDateTime, getStatusLabel } from "@/lib/format";
-import { formatInputDate, formatInputTime, getClinicDayBounds, zonedDateTimeToUtc } from "@/lib/timezone";
+import { APP_TIME_ZONE, formatInputDate, formatInputTime, getClinicDayBounds, zonedDateTimeToUtc } from "@/lib/timezone";
 import {
   createAppointment,
   createClient,
@@ -27,7 +27,9 @@ import { logoutDoctor } from "./auth-actions";
 import { ClientManager } from "./client-manager";
 import { ConfirmSubmitButton } from "./confirm-submit-button";
 import { CrmPanel } from "./crm-panel";
+import { MetricsControls } from "./metrics-controls";
 import { NotificationsMenu } from "./notifications-menu";
+import { ThemeToggle } from "./theme-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -298,6 +300,7 @@ export default async function Home({
                 title: notification.title
               }))}
             />
+            <ThemeToggle />
             <div className="flex items-center gap-2">
               <Clock3 size={18} />
               <span>{formatDate(new Date())}</span>
@@ -318,37 +321,7 @@ export default async function Home({
         <Panel title="Resumen y métricas" icon={<CalendarClock size={18} />}>
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <p className="text-sm font-semibold text-ink/60">{metricTitle}</p>
-            <form className="flex flex-wrap items-end gap-2" method="get">
-              <label className="grid gap-1">
-                <span className="label">Vista</span>
-                <select className="field w-32" defaultValue={metricView} name="metricView">
-                  <option value="day">Día</option>
-                  <option value="month">Mes</option>
-                  <option value="year">Año</option>
-                </select>
-              </label>
-              {metricView === "day" ? (
-                <label className="grid gap-1">
-                  <span className="label">Día</span>
-                  <input className="field w-44" defaultValue={metricDay} name="metricDay" type="date" />
-                </label>
-              ) : null}
-              {metricView === "month" ? (
-                <label className="grid gap-1">
-                  <span className="label">Mes</span>
-                  <input className="field w-44" defaultValue={metricMonth} name="metricMonth" type="month" />
-                </label>
-              ) : null}
-              {metricView === "year" ? (
-                <label className="grid gap-1">
-                  <span className="label">Año</span>
-                  <input className="field w-32" defaultValue={metricYear} min="2020" name="metricYear" type="number" />
-                </label>
-              ) : null}
-              <button className="secondary-button" type="submit">
-                Ver métricas
-              </button>
-            </form>
+            <MetricsControls day={metricDay} month={metricMonth} view={metricView} year={metricYear} />
           </div>
 
           <section className="grid gap-4 md:grid-cols-4 xl:grid-cols-8">
@@ -640,7 +613,10 @@ function WeeklyCalendar({
             key={day}
           >
             <div className="mb-3 flex items-center justify-between gap-2">
-              <p className="font-semibold">{formatDate(zonedDayForDisplay(day))}</p>
+              <div>
+                <p className="font-semibold capitalize">{formatWeekday(zonedDayForDisplay(day))}</p>
+                <p className="text-xs font-semibold text-ink/55">{formatDate(zonedDayForDisplay(day))}</p>
+              </div>
               <span className="text-xs font-semibold text-ink/50">{dayAppointments.length}</span>
             </div>
             <div className="grid gap-2">
@@ -733,11 +709,11 @@ function WaitlistPanel({
         </label>
         <label className="grid gap-1">
           <span className="label">Desde</span>
-          <input className="field" name="startTime" required type="time" />
+          <TimeSelect name="startTime" required />
         </label>
         <label className="grid gap-1">
           <span className="label">Hasta</span>
-          <input className="field" name="endTime" required type="time" />
+          <TimeSelect name="endTime" required />
         </label>
         <label className="grid gap-1 md:col-span-2">
           <span className="label">Prioridad</span>
@@ -757,7 +733,7 @@ function WaitlistPanel({
           </label>
           <label className="grid gap-1">
             <span className="label">Hora de respaldo</span>
-            <input className="field" name="fallbackTime" type="time" />
+            <TimeSelect name="fallbackTime" />
           </label>
         </div>
         <label className="grid gap-1 md:col-span-2">
@@ -1018,6 +994,19 @@ function Field({
   );
 }
 
+function TimeSelect({ name, required = false }: { name: string; required?: boolean }) {
+  return (
+    <select className="field" name={name} required={required}>
+      <option value="">Selecciona una hora</option>
+      {buildTimeOptions().map((time) => (
+        <option key={time} value={time}>
+          {time}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function ClientSelect({
   clients
 }: {
@@ -1112,7 +1101,7 @@ function getYearBounds(year: string) {
   };
 }
 
-function getMetricView(view?: string) {
+function getMetricView(view?: string): "day" | "month" | "year" {
   return view === "month" || view === "year" ? view : "day";
 }
 
@@ -1186,6 +1175,13 @@ function zonedDayForDisplay(day: string) {
   return zonedDateTimeToUtc(day, "12:00");
 }
 
+function formatWeekday(date: Date) {
+  return new Intl.DateTimeFormat("es-MX", {
+    timeZone: APP_TIME_ZONE,
+    weekday: "long"
+  }).format(date);
+}
+
 function getWaitlistOfferStartForView(
   entry: {
     desiredDate: string;
@@ -1226,6 +1222,18 @@ function timeToMinutes(time: string) {
   const [hour, minute] = time.split(":").map(Number);
 
   return hour * 60 + minute;
+}
+
+function buildTimeOptions() {
+  const times: string[] = [];
+
+  for (let hour = 0; hour < 24; hour += 1) {
+    for (let minute = 0; minute < 60; minute += 15) {
+      times.push(`${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`);
+    }
+  }
+
+  return times;
 }
 
 function minutesToTime(minutes: number) {
