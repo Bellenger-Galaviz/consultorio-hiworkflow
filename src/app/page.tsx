@@ -261,7 +261,7 @@ export default async function Home({
                 className="h-auto w-full object-contain"
                 height={72}
                 priority
-                src="/hiworkflow-logo.png"
+                src="/hiworkflow-logo-wide.png"
                 width={220}
               />
             </div>
