@@ -176,6 +176,7 @@ textarea {
   background-color: #0d1410;
   color: #eef7f1;
   border-color: rgba(236, 244, 239, 0.2);
+  color-scheme: dark;
 }
 
 .dark .field::placeholder {
@@ -206,8 +207,10 @@ textarea {
 
 .dark input[type="date"]::-webkit-calendar-picker-indicator,
 .dark input[type="month"]::-webkit-calendar-picker-indicator,
-.dark input[type="time"]::-webkit-calendar-picker-indicator {
-  filter: invert(1) brightness(1.4);
+.dark input[type="time"]::-webkit-calendar-picker-indicator,
+.dark input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(96%) sepia(9%) saturate(518%) hue-rotate(86deg) brightness(103%) contrast(95%) !important;
+  opacity: 1;
 }
 
 .dark option {
