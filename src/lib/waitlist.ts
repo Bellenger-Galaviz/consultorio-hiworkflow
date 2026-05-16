@@ -3,7 +3,7 @@ import { findAppointmentConflict, getNextClientAppointmentNumber } from "@/lib/a
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { sendReminderToN8n } from "@/lib/n8n";
-import { formatInputDate, formatInputTime } from "@/lib/timezone";
+import { formatInputDate, formatInputTime, zonedDateTimeToUtc } from "@/lib/timezone";
 
 type AppointmentWithClient = Appointment & {
   client: Client;
@@ -28,20 +28,7 @@ export function waitlistEntryMatchesSlot(
   startsAt: Date,
   durationMin: number
 ) {
-  if (entry.status !== "WAITING") {
-    return false;
-  }
-
-  if (entry.desiredDate !== formatInputDate(startsAt) || entry.durationMin > durationMin) {
-    return false;
-  }
-
-  const slotStart = timeToMinutes(formatInputTime(startsAt));
-  const slotEnd = slotStart + durationMin;
-  const desiredStart = timeToMinutes(entry.startTime);
-  const desiredEnd = timeToMinutes(entry.endTime);
-
-  return slotStart >= desiredStart && slotEnd <= desiredEnd;
+  return Boolean(getWaitlistOfferStartForSlot(entry, startsAt, durationMin));
 }
 
 export function waitlistEntryMatchesOpportunity(
@@ -49,6 +36,47 @@ export function waitlistEntryMatchesOpportunity(
   opportunity: WaitlistOpportunity
 ) {
   return waitlistEntryMatchesSlot(entry, opportunity.startsAt, opportunity.durationMin);
+}
+
+export function getWaitlistOfferStart(
+  entry: WaitlistEntry,
+  opportunity: WaitlistOpportunity
+) {
+  return getWaitlistOfferStartForSlot(entry, opportunity.startsAt, opportunity.durationMin);
+}
+
+function getWaitlistOfferStartForSlot(
+  entry: WaitlistEntry,
+  startsAt: Date,
+  durationMin: number
+) {
+  if (entry.status !== "WAITING") {
+    return null;
+  }
+
+  if (entry.desiredDate !== formatInputDate(startsAt) || entry.durationMin > durationMin) {
+    return null;
+  }
+
+  const slotStart = timeToMinutes(formatInputTime(startsAt));
+  const slotEnd = slotStart + durationMin;
+  const desiredStart = timeToMinutes(entry.startTime);
+  const desiredEnd = timeToMinutes(entry.endTime);
+  const offerStart = Math.max(slotStart, desiredStart);
+  const latestStart = Math.min(slotEnd - entry.durationMin, desiredEnd - entry.durationMin);
+
+  if (offerStart > latestStart) {
+    return null;
+  }
+
+  return zonedDateTimeToUtc(entry.desiredDate, minutesToTime(offerStart));
+}
+
+function minutesToTime(minutes: number) {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 export async function notifyWaitlistForAvailableSlot(appointment: AppointmentWithClient) {
@@ -139,11 +167,17 @@ export async function offerWaitlistOpportunity({
   if (!entry || !waitlistEntryMatchesOpportunity(entry, opportunity)) {
     throw new Error("Ese cliente ya no coincide con el horario disponible.");
   }
+  const offerStartsAt = getWaitlistOfferStart(entry, opportunity);
+
+  if (!offerStartsAt) {
+    throw new Error("Ese cliente ya no coincide con el horario disponible.");
+  }
 
   const conflict = await findAppointmentConflict({
     userId,
-    startsAt: opportunity.startsAt,
-    durationMin: entry.durationMin
+    startsAt: offerStartsAt,
+    durationMin: entry.durationMin,
+    ignoreAppointmentId: entry.fallbackAppointmentId ?? undefined
   });
 
   if (conflict) {
@@ -156,7 +190,7 @@ export async function offerWaitlistOpportunity({
   }
 
   const message = `Hola ${entry.client.fullName}, se liberó un horario para "${entry.title}" el ${formatDateTime(
-    opportunity.startsAt
+    offerStartsAt
   )}. Responde SI para agendarlo o NO para seguir en lista de espera.`;
 
   const locked = await prisma.waitlistOpportunity.updateMany({
@@ -164,6 +198,7 @@ export async function offerWaitlistOpportunity({
     data: {
       status: "OFFERED",
       offeredEntryId: entry.id,
+      offeredStartsAt: offerStartsAt,
       offeredAt: new Date()
     }
   });
@@ -185,6 +220,7 @@ export async function offerWaitlistOpportunity({
       data: {
         status: "AVAILABLE",
         offeredEntryId: null,
+        offeredStartsAt: null,
         offeredAt: null
       }
     });
@@ -209,7 +245,7 @@ export async function offerWaitlistOpportunity({
       userId,
       type: "WAITLIST_OFFER_SENT",
       title: "Oferta enviada",
-      body: `Se ofreció ${formatDateTime(opportunity.startsAt)} a ${entry.client.fullName}.`,
+      body: `Se ofreció ${formatDateTime(offerStartsAt)} a ${entry.client.fullName}.`,
       target: "#lista-espera",
       waitlistEntryId: entry.id,
       waitlistOpportunityId: opportunity.id
@@ -274,10 +310,12 @@ export async function bookWaitlistOffer(opportunity: OpportunityWithEntry) {
   if (locked.count === 0) {
     return { action: "WAITLIST_OFFER_EXPIRED", ok: true };
   }
+  const appointmentStartsAt =
+    opportunity.offeredStartsAt ?? getWaitlistOfferStart(entry, opportunity) ?? opportunity.startsAt;
 
   const conflict = await findAppointmentConflict({
     userId: opportunity.userId,
-    startsAt: opportunity.startsAt,
+    startsAt: appointmentStartsAt,
     durationMin: entry.durationMin,
     ignoreAppointmentId: entry.fallbackAppointmentId ?? undefined
   });
@@ -328,12 +366,12 @@ export async function bookWaitlistOffer(opportunity: OpportunityWithEntry) {
         where: { id: fallbackAppointment.id },
         data: {
           previousStartsAt: fallbackAppointment.startsAt,
-          startsAt: opportunity.startsAt,
+          startsAt: appointmentStartsAt,
           durationMin: entry.durationMin,
           status: "CONFIRMED",
           notes: `${fallbackAppointment.notes ?? ""}\nAdelantada desde lista de espera de ${formatDateTime(
             fallbackAppointment.startsAt
-          )} a ${formatDateTime(opportunity.startsAt)}.`.trim()
+          )} a ${formatDateTime(appointmentStartsAt)}.`.trim()
         }
       })
     : await prisma.appointment.create({
@@ -343,7 +381,7 @@ export async function bookWaitlistOffer(opportunity: OpportunityWithEntry) {
           clientAppointmentNumber:
             entry.clientAppointmentNumber ?? (await getNextClientAppointmentNumber(entry.clientId)),
           title: entry.title,
-          startsAt: opportunity.startsAt,
+          startsAt: appointmentStartsAt,
           durationMin: entry.durationMin,
           status: "CONFIRMED",
           notes: entry.notes ? `Desde lista de espera. ${entry.notes}` : "Desde lista de espera."
@@ -418,6 +456,7 @@ export async function declineWaitlistOffer(opportunity: OpportunityWithEntry) {
     data: {
       status: "AVAILABLE",
       offeredEntryId: null,
+      offeredStartsAt: null,
       offeredAt: null
     }
   });

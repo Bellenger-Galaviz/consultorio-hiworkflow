@@ -1,5 +1,4 @@
 import {
-  Bell,
   CalendarClock,
   Clock3,
   LogOut,
@@ -26,7 +25,9 @@ import {
 import { AppointmentForm } from "./appointment-form";
 import { logoutDoctor } from "./auth-actions";
 import { ClientManager } from "./client-manager";
+import { ConfirmSubmitButton } from "./confirm-submit-button";
 import { CrmPanel } from "./crm-panel";
+import { NotificationsMenu } from "./notifications-menu";
 
 export const dynamic = "force-dynamic";
 
@@ -288,9 +289,9 @@ export default async function Home({
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm text-ink/70">
             <NotificationsMenu
-              notifications={notifications.map((notification) => ({
+              initialNotifications={notifications.map((notification) => ({
                 body: notification.body,
-                createdAt: notification.createdAt,
+                createdAt: notification.createdAt.toISOString(),
                 id: notification.id,
                 status: notification.status,
                 target: notification.target,
@@ -537,6 +538,7 @@ export default async function Home({
               durationMin: opportunity.durationMin,
               id: opportunity.id,
               offeredEntryId: opportunity.offeredEntryId,
+              offeredStartsAt: opportunity.offeredStartsAt,
               startsAt: opportunity.startsAt,
               status: opportunity.status
             }))}
@@ -602,51 +604,6 @@ function AppointmentTitle({
       {number ? <span className="text-xs font-semibold text-leaf">Cita #{number}</span> : null}
       <span>{title}</span>
     </div>
-  );
-}
-
-function NotificationsMenu({
-  notifications
-}: {
-  notifications: Array<{
-    body: string;
-    createdAt: Date;
-    id: string;
-    status: string;
-    target: string | null;
-    title: string;
-  }>;
-}) {
-  const unread = notifications.filter((notification) => notification.status === "UNREAD").length;
-
-  return (
-    <details className="relative">
-      <summary className="secondary-button list-none">
-        <Bell size={16} />
-        Notificaciones
-        {unread > 0 ? (
-          <span className="rounded-full bg-coral px-2 py-0.5 text-xs font-bold text-white">
-            {unread}
-          </span>
-        ) : null}
-      </summary>
-      <div className="absolute right-0 z-20 mt-2 w-80 overflow-hidden rounded-md border border-black/10 bg-white shadow-soft">
-        {notifications.map((notification) => (
-          <Link
-            className="block border-b border-black/10 px-4 py-3 text-left last:border-b-0 hover:bg-paper"
-            href={notification.target || "/"}
-            key={notification.id}
-          >
-            <p className="font-semibold text-ink">{notification.title}</p>
-            <p className="mt-1 text-sm text-ink/60">{notification.body}</p>
-            <p className="mt-1 text-xs text-ink/45">{formatDateTime(notification.createdAt)}</p>
-          </Link>
-        ))}
-        {notifications.length === 0 ? (
-          <div className="px-4 py-6 text-center text-sm text-ink/60">Sin notificaciones.</div>
-        ) : null}
-      </div>
-    </details>
   );
 }
 
@@ -743,6 +700,7 @@ function WaitlistPanel({
     durationMin: number;
     id: string;
     offeredEntryId: string | null;
+    offeredStartsAt: Date | null;
     startsAt: Date;
     status: string;
   }>;
@@ -814,9 +772,15 @@ function WaitlistPanel({
 
       <div className="overflow-hidden rounded-md border border-black/10">
         {entries.map((entry) => {
-          const matchingOpportunities = opportunities.filter((opportunity) =>
-            waitlistEntryMatchesOpportunityForView(entry, opportunity)
-          );
+          const matchingOpportunities = opportunities
+            .map((opportunity) => ({
+              opportunity,
+              startsAt: getWaitlistOfferStartForView(entry, opportunity)
+            }))
+            .filter(
+              (offer): offer is { opportunity: (typeof opportunities)[number]; startsAt: Date } =>
+                Boolean(offer.startsAt)
+            );
           const offeredOpportunity = opportunities.find(
             (opportunity) => opportunity.status === "OFFERED" && opportunity.offeredEntryId === entry.id
           );
@@ -845,25 +809,28 @@ function WaitlistPanel({
               </p>
             ) : null}
             <div className="flex flex-wrap gap-2">
-              {matchingOpportunities.map((opportunity) => (
+              {matchingOpportunities.map(({ opportunity, startsAt }) => (
                 <form action={offerAction} key={opportunity.id}>
                   <input name="waitlistEntryId" type="hidden" value={entry.id} />
                   <input name="opportunityId" type="hidden" value={opportunity.id} />
                   <button className="secondary-button" type="submit">
-                    Ofrecer {formatDateTime(opportunity.startsAt)}
+                    Ofrecer {formatDateTime(startsAt)}
                   </button>
                 </form>
               ))}
               {offeredOpportunity ? (
                 <span className="status-pill bg-amber/20 text-ink">
-                  Oferta enviada para {formatDateTime(offeredOpportunity.startsAt)}
+                  Oferta enviada para {formatDateTime(offeredOpportunity.offeredStartsAt ?? offeredOpportunity.startsAt)}
                 </span>
               ) : null}
               <form action={deleteAction}>
                 <input name="waitlistEntryId" type="hidden" value={entry.id} />
-                <button className="secondary-button text-coral" type="submit">
+                <ConfirmSubmitButton
+                  className="secondary-button text-coral"
+                  message={`¿Eliminar a ${entry.clientName} de la lista de espera?`}
+                >
                   Eliminar
-                </button>
+                </ConfirmSubmitButton>
               </form>
             </div>
           </div>
@@ -1219,7 +1186,7 @@ function zonedDayForDisplay(day: string) {
   return zonedDateTimeToUtc(day, "12:00");
 }
 
-function waitlistEntryMatchesOpportunityForView(
+function getWaitlistOfferStartForView(
   entry: {
     desiredDate: string;
     durationMin: number;
@@ -1234,25 +1201,38 @@ function waitlistEntryMatchesOpportunityForView(
   }
 ) {
   if (entry.status !== "WAITING" || opportunity.status !== "AVAILABLE") {
-    return false;
+    return null;
   }
 
   if (entry.desiredDate !== formatInputDate(opportunity.startsAt) || entry.durationMin > opportunity.durationMin) {
-    return false;
+    return null;
   }
 
   const slotStart = timeToMinutes(formatInputTime(opportunity.startsAt));
   const slotEnd = slotStart + opportunity.durationMin;
   const desiredStart = timeToMinutes(entry.startTime);
   const desiredEnd = timeToMinutes(entry.endTime);
+  const offerStart = Math.max(slotStart, desiredStart);
+  const latestStart = Math.min(slotEnd - entry.durationMin, desiredEnd - entry.durationMin);
 
-  return slotStart >= desiredStart && slotEnd <= desiredEnd;
+  if (offerStart > latestStart) {
+    return null;
+  }
+
+  return zonedDateTimeToUtc(entry.desiredDate, minutesToTime(offerStart));
 }
 
 function timeToMinutes(time: string) {
   const [hour, minute] = time.split(":").map(Number);
 
   return hour * 60 + minute;
+}
+
+function minutesToTime(minutes: number) {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 function getWaitlistStatusLabel(status: string) {

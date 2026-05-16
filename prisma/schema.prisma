@@ -91,6 +91,7 @@ model WaitlistOpportunity {
   durationMin         Int
   status              String         @default("AVAILABLE")
   offeredEntryId      String?
+  offeredStartsAt     DateTime?
   offeredAt           DateTime?
   bookedAppointmentId String?
   createdAt           DateTime       @default(now())
