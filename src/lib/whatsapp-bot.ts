@@ -1,5 +1,5 @@
 ﻿import type { Appointment, Client, User } from "@prisma/client";
-import { findAppointmentConflict } from "@/lib/appointments";
+import { findAppointmentConflict, getAppointmentEnd } from "@/lib/appointments";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import {
@@ -187,6 +187,14 @@ function getSelectedOptionFromMessage(message: string, agent?: IncomingMessage["
   const match = normalizeText(message).match(/^(?:opcion\s*)?(\d{1,2})\b/);
 
   return match ? Number(match[1]) : null;
+}
+
+function isAvailabilityFollowUp(message: string) {
+  const normalized = normalizeText(message);
+
+  return /\b(solo|solamente|mas|otras|otros|opciones|horarios|tarde|manana|mañana|semana|mes|disponible|disponibilidad)\b/.test(
+    normalized
+  );
 }
 
 async function findActiveAppointment(phone: string) {
@@ -468,12 +476,14 @@ async function findAvailableReprogramSlots({
   rangeStart,
   rangeEnd,
   period,
-  limit = 3
+  excludeIso = [],
+  limit = 5
 }: {
   appointment: AppointmentWithClient;
   rangeStart?: string;
   rangeEnd?: string;
   period?: string;
+  excludeIso?: string[];
   limit?: number;
 }) {
   const now = new Date();
@@ -486,6 +496,9 @@ async function findAvailableReprogramSlots({
   const workStart = timeToMinutes(process.env.AI_AGENT_BUSINESS_START ?? "09:00");
   const workEnd = timeToMinutes(process.env.AI_AGENT_BUSINESS_END ?? "19:00");
   const stepMin = Number(process.env.AI_AGENT_SLOT_STEP_MIN ?? 15);
+  const optionGapMin = Number(process.env.AI_AGENT_OPTION_GAP_MIN ?? 120);
+  const maxOptionsPerDay = Number(process.env.AI_AGENT_MAX_OPTIONS_PER_DAY ?? 3);
+  const excluded = new Set(excludeIso);
   const availableDays = new Set(
     (process.env.AI_AGENT_WORK_DAYS ?? "1,2,3,4,5,6")
       .split(",")
@@ -501,9 +514,20 @@ async function findAvailableReprogramSlots({
         : period === "evening"
           ? timeToMinutes("23:59")
           : 24 * 60;
-  const slots: Date[] = [];
+  const rangeStartsAt = zonedDateTimeToUtc(startDay, "00:00");
+  const rangeEndsAt = zonedDateTimeToUtc(addDaysToInputDate(endDay, 1), "00:00");
+  const existingAppointments = await prisma.appointment.findMany({
+    where: {
+      userId: appointment.userId,
+      status: { in: ["PENDING", "CONFIRMED"] },
+      id: { not: appointment.id },
+      startsAt: { lt: rangeEndsAt }
+    },
+    orderBy: { startsAt: "asc" }
+  });
+  const candidates: Date[] = [];
 
-  for (let day = startDay; day <= endDay && slots.length < limit; day = addDaysToInputDate(day, 1)) {
+  for (let day = startDay; day <= endDay; day = addDaysToInputDate(day, 1)) {
     const dayOfWeek = new Date(`${day}T12:00:00Z`).getUTCDay();
 
     if (!availableDays.has(dayOfWeek)) {
@@ -514,27 +538,59 @@ async function findAvailableReprogramSlots({
     const startMin = Math.max(workStart, periodStart);
     const endMin = Math.min(latestStart, periodEnd - appointment.durationMin);
 
-    for (let minutes = startMin; minutes <= endMin && slots.length < limit; minutes += stepMin) {
+    for (let minutes = startMin; minutes <= endMin; minutes += stepMin) {
       const startsAt = zonedDateTimeToUtc(day, minutesToTime(minutes));
+      const endsAt = getAppointmentEnd(startsAt, appointment.durationMin);
 
-      if (startsAt <= now) {
+      if (startsAt <= now || startsAt < rangeStartsAt || excluded.has(startsAt.toISOString())) {
         continue;
       }
 
-      const conflict = await findAppointmentConflict({
-        userId: appointment.userId,
-        startsAt,
-        durationMin: appointment.durationMin,
-        ignoreAppointmentId: appointment.id
+      const conflict = existingAppointments.find((existingAppointment) => {
+        const existingEnd = getAppointmentEnd(
+          existingAppointment.startsAt,
+          existingAppointment.durationMin
+        );
+
+        return startsAt < existingEnd && endsAt > existingAppointment.startsAt;
       });
 
       if (!conflict) {
-        slots.push(startsAt);
+        candidates.push(startsAt);
       }
     }
   }
 
-  return slots;
+  const selected: Date[] = [];
+  const selectedPerDay = new Map<string, number>();
+
+  for (const candidate of candidates) {
+    const day = formatInputDate(candidate);
+    const sameDayCount = selectedPerDay.get(day) ?? 0;
+
+    if (sameDayCount >= maxOptionsPerDay) {
+      continue;
+    }
+
+    const tooClose = selected.some(
+      (slot) =>
+        formatInputDate(slot) === day &&
+        Math.abs(slot.getTime() - candidate.getTime()) < optionGapMin * 60 * 1000
+    );
+
+    if (tooClose) {
+      continue;
+    }
+
+    selected.push(candidate);
+    selectedPerDay.set(day, sameDayCount + 1);
+
+    if (selected.length >= limit) {
+      break;
+    }
+  }
+
+  return selected;
 }
 
 function buildAvailabilityMessage(appointment: AppointmentWithClient, slots: Date[]) {
@@ -546,23 +602,48 @@ function buildAvailabilityMessage(appointment: AppointmentWithClient, slots: Dat
     .map((slot, index) => `${index + 1}. ${formatDateTime(slot)}`)
     .join("\n");
 
-  return `${appointment.client.fullName}, encontré estos horarios disponibles:\n\n${options}\n\nResponde con el número de la opción que prefieres o pregunta por otro rango.`;
+  return `${appointment.client.fullName}, encontré estos horarios disponibles:\n\n${options}\n\nResponde con el número de la opción que prefieres. Si quieres más alternativas, dime "más opciones" o pregunta por otro rango.`;
 }
 
 async function replyWithAvailabilityOptions(
   appointment: AppointmentWithClient,
-  options?: { rangeStart?: string; rangeEnd?: string; period?: string }
+  options?: { rangeStart?: string; rangeEnd?: string; period?: string; excludeIso?: string[] }
 ) {
   const slots = await findAvailableReprogramSlots({
     appointment,
     rangeStart: options?.rangeStart,
     rangeEnd: options?.rangeEnd,
-    period: options?.period
+    period: options?.period,
+    excludeIso: options?.excludeIso
   });
 
   const message = buildAvailabilityMessage(appointment, slots);
 
   await reply(appointment, message, "AVAILABILITY_OPTIONS");
+  await prisma.whatsappAgentState.upsert({
+    where: {
+      appointmentId_topic: {
+        appointmentId: appointment.id,
+        topic: "REPROGRAM"
+      }
+    },
+    create: {
+      userId: appointment.userId,
+      clientId: appointment.clientId,
+      appointmentId: appointment.id,
+      topic: "REPROGRAM",
+      rangeStart: options?.rangeStart,
+      rangeEnd: options?.rangeEnd,
+      period: options?.period,
+      offeredSlots: slots.map((slot) => slot.toISOString())
+    },
+    update: {
+      rangeStart: options?.rangeStart,
+      rangeEnd: options?.rangeEnd,
+      period: options?.period,
+      offeredSlots: slots.map((slot) => slot.toISOString())
+    }
+  });
 
   return { ok: true, action: "SENT_AVAILABILITY_OPTIONS", appointmentId: appointment.id };
 }
@@ -571,6 +652,25 @@ async function selectOfferedAvailabilityOption(
   appointment: AppointmentWithClient,
   selectedOption: number
 ) {
+  const state = await prisma.whatsappAgentState.findUnique({
+    where: {
+      appointmentId_topic: {
+        appointmentId: appointment.id,
+        topic: "REPROGRAM"
+      }
+    }
+  });
+  const offeredSlots = Array.isArray(state?.offeredSlots) ? state.offeredSlots : [];
+  const offeredSlot = offeredSlots[selectedOption - 1];
+
+  if (typeof offeredSlot === "string") {
+    const startsAt = new Date(offeredSlot);
+
+    if (!Number.isNaN(startsAt.getTime())) {
+      return reprogramAppointment(appointment, startsAt);
+    }
+  }
+
   const latestOptions = await prisma.chatMessage.findFirst({
     where: {
       appointmentId: appointment.id,
@@ -698,10 +798,54 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     hasResponseContext &&
     input.agent?.intent === "AVAILABILITY_QUERY"
   ) {
+    const previousState = await prisma.whatsappAgentState.findUnique({
+      where: {
+        appointmentId_topic: {
+          appointmentId: appointment.id,
+          topic: "REPROGRAM"
+        }
+      }
+    });
+    const isFollowUpWithoutNewRange =
+      isAvailabilityFollowUp(input.message) &&
+      !input.agent.rangeStart &&
+      !input.agent.rangeEnd &&
+      previousState;
+    const previousSlots = Array.isArray(previousState?.offeredSlots)
+      ? previousState.offeredSlots.filter((slot): slot is string => typeof slot === "string")
+      : [];
+
     return replyWithAvailabilityOptions(appointment, {
-      rangeStart: input.agent.rangeStart,
-      rangeEnd: input.agent.rangeEnd,
-      period: input.agent.period
+      rangeStart: isFollowUpWithoutNewRange ? previousState.rangeStart ?? undefined : input.agent.rangeStart,
+      rangeEnd: isFollowUpWithoutNewRange ? previousState.rangeEnd ?? undefined : input.agent.rangeEnd,
+      period: input.agent.period ?? previousState?.period ?? undefined,
+      excludeIso: isFollowUpWithoutNewRange ? previousSlots : undefined
+    });
+  }
+
+  if (
+    appointment.status === "REPROGRAM_PENDING" &&
+    hasResponseContext &&
+    intent === "UNKNOWN" &&
+    isAvailabilityFollowUp(input.message)
+  ) {
+    const previousState = await prisma.whatsappAgentState.findUnique({
+      where: {
+        appointmentId_topic: {
+          appointmentId: appointment.id,
+          topic: "REPROGRAM"
+        }
+      }
+    });
+    const previousSlots = Array.isArray(previousState?.offeredSlots)
+      ? previousState.offeredSlots.filter((slot): slot is string => typeof slot === "string")
+      : [];
+
+    return replyWithAvailabilityOptions(appointment, {
+      rangeStart: previousState?.rangeStart ?? undefined,
+      rangeEnd: previousState?.rangeEnd ?? undefined,
+      period: previousState?.period ?? undefined,
+      excludeIso: previousSlots
     });
   }
 
