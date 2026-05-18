@@ -1,4 +1,4 @@
-import type { Appointment, Client } from "@prisma/client";
+import type { Appointment, Client, UnknownContact } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { formatInputDate } from "@/lib/timezone";
@@ -38,4 +38,35 @@ export async function createAppointmentStatusNotification(
       appointmentId: appointment.id
     }
   });
+}
+
+export async function createClientMessageNotification(client: Client, message: string) {
+  await prisma.notification.create({
+    data: {
+      userId: client.userId,
+      type: "WHATSAPP_CLIENT_MESSAGE",
+      title: "Mensaje de cliente",
+      body: `${client.fullName} enviÃ³: "${truncateMessage(message)}".`,
+      target: `/?chatClientId=${client.id}#crm-whatsapp`
+    }
+  });
+}
+
+export async function createUnknownContactNotification(
+  contact: UnknownContact,
+  message: string
+) {
+  await prisma.notification.create({
+    data: {
+      userId: contact.userId,
+      type: "WHATSAPP_UNKNOWN_CONTACT",
+      title: "Mensaje de nÃºmero nuevo",
+      body: `${contact.phone} enviÃ³: "${truncateMessage(message)}".`,
+      target: `/?chatUnknownId=${contact.id}#crm-whatsapp`
+    }
+  });
+}
+
+function truncateMessage(message: string) {
+  return message.length > 90 ? `${message.slice(0, 87)}...` : message;
 }

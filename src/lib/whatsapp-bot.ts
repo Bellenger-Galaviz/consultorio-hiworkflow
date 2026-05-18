@@ -1,8 +1,12 @@
-import type { Appointment, Client } from "@prisma/client";
+import type { Appointment, Client, User } from "@prisma/client";
 import { findAppointmentConflict } from "@/lib/appointments";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
-import { createAppointmentStatusNotification } from "@/lib/notifications";
+import {
+  createAppointmentStatusNotification,
+  createClientMessageNotification,
+  createUnknownContactNotification
+} from "@/lib/notifications";
 import { sendReminderToN8n } from "@/lib/n8n";
 import { zonedDateTimeToUtc } from "@/lib/timezone";
 import {
@@ -178,6 +182,123 @@ async function findActiveAppointment(phone: string) {
   };
 }
 
+async function findClientByPhone(phone: string) {
+  const normalized = normalizePhone(phone);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return prisma.client.findFirst({
+    where: {
+      phone: {
+        contains: normalized.slice(-10)
+      }
+    },
+    orderBy: { updatedAt: "desc" }
+  });
+}
+
+async function resolveUnknownContactOwner() {
+  const configuredEmail = process.env.INBOUND_DEFAULT_USER_EMAIL?.trim();
+
+  if (configuredEmail) {
+    const configuredUser = await prisma.user.findUnique({
+      where: { email: configuredEmail }
+    });
+
+    if (configuredUser) {
+      return configuredUser;
+    }
+  }
+
+  const users = await prisma.user.findMany({
+    orderBy: { createdAt: "asc" },
+    take: 2
+  });
+
+  return users.length === 1 ? users[0] : null;
+}
+
+async function recordKnownClientMessage(client: Client, message: string, intent: string) {
+  await prisma.chatMessage.create({
+    data: {
+      userId: client.userId,
+      clientId: client.id,
+      direction: "INBOUND",
+      message,
+      intent
+    }
+  });
+
+  await createClientMessageNotification(client, message);
+}
+
+async function recordUnknownContactMessage(user: User, phone: string, message: string, intent: string) {
+  const normalizedPhone = normalizePhone(phone);
+  const contact = await prisma.unknownContact.upsert({
+    where: {
+      userId_phone: {
+        userId: user.id,
+        phone: normalizedPhone
+      }
+    },
+    create: {
+      userId: user.id,
+      phone: normalizedPhone,
+      displayName: `NÃºmero nuevo ${normalizedPhone}`
+    },
+    update: {
+      status: "NEW"
+    }
+  });
+
+  await prisma.unknownContactMessage.create({
+    data: {
+      userId: user.id,
+      unknownContactId: contact.id,
+      direction: "INBOUND",
+      message,
+      intent
+    }
+  });
+
+  await createUnknownContactNotification(contact, message);
+
+  return contact;
+}
+
+async function recordMessageWithoutActiveAppointment(input: IncomingMessage, intent: string) {
+  const client = await findClientByPhone(input.phone);
+
+  if (client) {
+    await recordKnownClientMessage(client, input.message, intent);
+
+    return {
+      ok: true,
+      action: "CLIENT_MESSAGE_RECORDED",
+      clientId: client.id
+    };
+  }
+
+  const owner = await resolveUnknownContactOwner();
+
+  if (!owner) {
+    return {
+      ok: true,
+      action: "NO_OWNER_FOR_UNKNOWN_CONTACT"
+    };
+  }
+
+  const contact = await recordUnknownContactMessage(owner, input.phone, input.message, intent);
+
+  return {
+    ok: true,
+    action: "UNKNOWN_CONTACT_RECORDED",
+    unknownContactId: contact.id
+  };
+}
+
 async function reply(appointment: AppointmentWithClient, message: string, intent: string) {
   await prisma.chatMessage.create({
     data: {
@@ -243,15 +364,11 @@ async function reprogramAppointment(appointment: AppointmentWithClient, proposed
 export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   const found = await findActiveAppointment(input.phone);
   const waitlistOffer = await findPendingWaitlistOfferByPhone(input.phone);
+  const intent = detectIntent(input.message);
 
   if (!found && !waitlistOffer) {
-    return {
-      ok: true,
-      action: "NO_ACTIVE_APPOINTMENT"
-    };
+    return recordMessageWithoutActiveAppointment(input, intent);
   }
-
-  const intent = detectIntent(input.message);
 
   if (waitlistOffer && isWaitlistConfirm(input.message)) {
     const entry = waitlistOffer.offeredEntry;
@@ -298,10 +415,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   }
 
   if (!found) {
-    return {
-      ok: true,
-      action: "NO_ACTIVE_APPOINTMENT"
-    };
+    return recordMessageWithoutActiveAppointment(input, intent);
   }
 
   const { appointment } = found;
@@ -325,10 +439,12 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     }
 
     if (intent === "REPROGRAM_REQUEST") {
-      await prisma.appointment.update({
+      const reprogramAppointment = await prisma.appointment.update({
         where: { id: appointment.id },
-        data: { status: "REPROGRAM_PENDING" }
+        data: { status: "REPROGRAM_PENDING" },
+        include: { client: true }
       });
+      await createAppointmentStatusNotification(reprogramAppointment, "REPROGRAM_PENDING");
 
       const message = `Claro ${appointment.client.fullName}. Esta cita estaba cancelada; para reprogramarla responde con la nueva fecha y hora en formato DD/MM/AAAA HH:mm, por ejemplo 25/05/2026 16:30.`;
 
@@ -418,6 +534,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   const fallback = `Gracias por tu mensaje. Responde CONFIRMO para confirmar, CANCELAR para cancelar o REPROGRAMAR para cambiar tu cita.`;
 
   await reply(appointment, fallback, "FALLBACK_REPLY");
+  await createClientMessageNotification(appointment.client, input.message);
 
   return { ok: true, action: "FALLBACK", appointmentId: appointment.id };
 }

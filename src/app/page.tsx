@@ -52,9 +52,11 @@ export default async function Home({
 }: {
   searchParams: Promise<{
     chatClientId?: string;
+    chatUnknownId?: string;
     chatSearch?: string;
     day?: string;
     error?: string;
+    newClientPhone?: string;
     success?: string;
   }>;
 }) {
@@ -73,6 +75,7 @@ export default async function Home({
     appointments,
     blockingAppointments,
     chatThreads,
+    unknownChatThreads,
     weekAppointments,
     metricsAppointments,
     waitlistEntries,
@@ -111,6 +114,16 @@ export default async function Home({
         },
         reminders: {
           orderBy: { sentAt: "desc" },
+          take: 1
+        }
+      }
+    }),
+    prisma.unknownContact.findMany({
+      where: { userId: user.id, status: "NEW" },
+      include: {
+        _count: { select: { messages: true } },
+        messages: {
+          orderBy: { createdAt: "desc" },
           take: 1
         }
       }
@@ -167,9 +180,35 @@ export default async function Home({
     })
   ]);
 
-  const sortedChatThreads = chatThreads.sort((left, right) => {
-    const leftDate = getThreadLastDate(left)?.getTime() ?? 0;
-    const rightDate = getThreadLastDate(right)?.getTime() ?? 0;
+  const clientCrmThreads = chatThreads.map((client) => {
+    const lastMessage = getThreadLastMessage(client);
+
+    return {
+      count: client._count.chatMessages + client._count.reminders,
+      fullName: client.fullName,
+      id: client.id,
+      kind: "client" as const,
+      lastAt: lastMessage?.createdAt.toISOString() ?? null,
+      lastMessage: lastMessage?.message ?? null,
+      phone: client.phone
+    };
+  });
+  const unknownCrmThreads = unknownChatThreads.map((contact) => {
+    const lastMessage = contact.messages[0] ?? null;
+
+    return {
+      count: contact._count.messages,
+      fullName: contact.displayName ?? `NÃºmero nuevo ${contact.phone}`,
+      id: contact.id,
+      kind: "unknown" as const,
+      lastAt: lastMessage?.createdAt.toISOString() ?? contact.createdAt.toISOString(),
+      lastMessage: lastMessage?.message ?? null,
+      phone: contact.phone
+    };
+  });
+  const crmThreads = [...clientCrmThreads, ...unknownCrmThreads].sort((left, right) => {
+    const leftDate = left.lastAt ? new Date(left.lastAt).getTime() : 0;
+    const rightDate = right.lastAt ? new Date(right.lastAt).getTime() : 0;
 
     if (leftDate !== rightDate) {
       return rightDate - leftDate;
@@ -177,15 +216,24 @@ export default async function Home({
 
     return left.fullName.localeCompare(right.fullName, "es");
   });
-  const filteredChatThreads = chatSearch
-    ? sortedChatThreads.filter((client) => normalizeSearch(client.fullName).includes(chatSearch))
-    : sortedChatThreads;
-  const selectableChatThreads = chatSearch ? filteredChatThreads : sortedChatThreads;
-  const selectedChatClientId =
-    params.chatClientId && selectableChatThreads.some((client) => client.id === params.chatClientId)
-      ? params.chatClientId
-      : selectableChatThreads[0]?.id ?? null;
-  const [chatMessages, reminderMessages] = selectedChatClientId
+  const filteredCrmThreads = chatSearch
+    ? crmThreads.filter((thread) => normalizeSearch(thread.fullName).includes(chatSearch))
+    : crmThreads;
+  const selectableCrmThreads = chatSearch ? filteredCrmThreads : crmThreads;
+  const selectedCrmThread =
+    (params.chatUnknownId &&
+      selectableCrmThreads.find(
+        (thread) => thread.kind === "unknown" && thread.id === params.chatUnknownId
+      )) ||
+    (params.chatClientId &&
+      selectableCrmThreads.find(
+        (thread) => thread.kind === "client" && thread.id === params.chatClientId
+      )) ||
+    selectableCrmThreads[0] ||
+    null;
+  const selectedChatClientId = selectedCrmThread?.kind === "client" ? selectedCrmThread.id : null;
+  const selectedChatUnknownId = selectedCrmThread?.kind === "unknown" ? selectedCrmThread.id : null;
+  const [chatMessages, reminderMessages, unknownMessages] = selectedChatClientId
     ? await Promise.all([
         prisma.chatMessage.findMany({
           where: {
@@ -204,39 +252,48 @@ export default async function Home({
           include: { appointment: true },
           orderBy: { sentAt: "asc" },
           take: 80
-        })
+        }),
+        []
       ])
-    : [[], []];
+    : selectedChatUnknownId
+      ? await Promise.all([
+          [],
+          [],
+          prisma.unknownContactMessage.findMany({
+            where: {
+              userId: user.id,
+              unknownContactId: selectedChatUnknownId
+            },
+            orderBy: { createdAt: "asc" },
+            take: 80
+          })
+        ])
+      : [[], [], []];
   const chatMessageKeys = new Set(
     chatMessages.map((message) => `${message.appointmentId ?? ""}:${message.message}`)
   );
-  const crmMessages = [
-    ...chatMessages,
-    ...reminderMessages
-      .filter((message) => !chatMessageKeys.has(`${message.appointmentId ?? ""}:${message.message}`))
-      .map((message) => ({
-        appointment: message.appointment,
-        createdAt: message.sentAt,
-        direction: "OUTBOUND",
-        id: `reminder-${message.id}`,
-        intent: message.type,
+  const crmMessages = selectedChatClientId
+    ? [
+        ...chatMessages,
+        ...reminderMessages
+          .filter((message) => !chatMessageKeys.has(`${message.appointmentId ?? ""}:${message.message}`))
+          .map((message) => ({
+            appointment: message.appointment,
+            createdAt: message.sentAt,
+            direction: "OUTBOUND",
+            id: `reminder-${message.id}`,
+            intent: message.type,
+            message: message.message
+          }))
+      ].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+    : unknownMessages.map((message) => ({
+        appointment: null,
+        createdAt: message.createdAt,
+        direction: message.direction,
+        id: message.id,
+        intent: message.intent,
         message: message.message
-      }))
-  ].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
-  const selectedChatClient =
-    sortedChatThreads.find((client) => client.id === selectedChatClientId) ?? null;
-  const crmThreads = sortedChatThreads.map((client) => {
-    const lastMessage = getThreadLastMessage(client);
-
-    return {
-      count: client._count.chatMessages + client._count.reminders,
-      fullName: client.fullName,
-      id: client.id,
-      lastAt: lastMessage?.createdAt.toISOString() ?? null,
-      lastMessage: lastMessage?.message ?? null,
-      phone: client.phone
-    };
-  });
+      }));
   const initialCrmMessages = crmMessages.map((message) => ({
     appointmentTitle: message.appointment?.title ?? null,
     createdAt: message.createdAt.toISOString(),
@@ -246,6 +303,7 @@ export default async function Home({
   }));
   const returnTo = buildHomeHref({
     chatClientId: selectedChatClientId ?? undefined,
+    chatUnknownId: selectedChatUnknownId ?? undefined,
     chatSearch: params.chatSearch,
     day: params.day ? selectedDay : undefined
   });
@@ -322,6 +380,9 @@ export default async function Home({
                   {selectedChatClientId ? (
                     <input name="chatClientId" type="hidden" value={selectedChatClientId} />
                   ) : null}
+                  {selectedChatUnknownId ? (
+                    <input name="chatUnknownId" type="hidden" value={selectedChatUnknownId} />
+                  ) : null}
                   {params.chatSearch ? (
                     <input name="chatSearch" type="hidden" value={params.chatSearch} />
                   ) : null}
@@ -337,6 +398,7 @@ export default async function Home({
                   className="secondary-button"
                   href={buildHomeHref({
                     chatClientId: selectedChatClientId ?? undefined,
+                    chatUnknownId: selectedChatUnknownId ?? undefined,
                     chatSearch: params.chatSearch
                   })}
                 >
@@ -409,14 +471,22 @@ export default async function Home({
         </section>
 
         <section className="grid items-start gap-5 lg:grid-cols-[0.85fr_1.65fr]">
-          <Panel title="Nuevo cliente" icon={<UserPlus size={18} />}>
+          <Panel id="nuevo-cliente" title="Nuevo cliente" icon={<UserPlus size={18} />}>
             <p className="mb-4 flex items-center gap-2 text-sm font-semibold text-ink/60">
               <Users size={16} />
               {clients.length} clientes registrados en el consultorio
             </p>
             <form action={createClient} className="grid gap-3">
               <Field label="Nombre completo" minLength={2} name="fullName" placeholder="Nombre del cliente" required />
-              <Field label="WhatsApp" maxLength={20} minLength={8} name="phone" placeholder="5216141234567" required />
+              <Field
+                defaultValue={normalizePhone(params.newClientPhone ?? "")}
+                label="WhatsApp"
+                maxLength={20}
+                minLength={8}
+                name="phone"
+                placeholder="5216141234567"
+                required
+              />
               <Field label="Correo" name="email" placeholder="cliente@correo.com" type="email" />
               <label className="grid gap-1">
                 <span className="label">Notas</span>
@@ -486,10 +556,10 @@ export default async function Home({
         </Panel>
 
         <section className="grid gap-5">
-          <Panel title="CRM de WhatsApp" icon={<MessageCircle size={18} />}>
+          <Panel id="crm-whatsapp" title="CRM de WhatsApp" icon={<MessageCircle size={18} />}>
             <CrmPanel
               initialMessages={initialCrmMessages}
-              initialSelectedClientId={selectedChatClient?.id ?? null}
+              initialSelectedThreadId={selectedCrmThread?.id ?? null}
               threads={crmThreads}
             />
           </Panel>
@@ -1230,10 +1300,12 @@ function getPriorityLabel(priority: string) {
 
 function buildHomeHref({
   chatClientId,
+  chatUnknownId,
   chatSearch,
   day
 }: {
   chatClientId?: string;
+  chatUnknownId?: string;
   chatSearch?: string;
   day?: string;
 }) {
@@ -1245,6 +1317,10 @@ function buildHomeHref({
 
   if (chatClientId) {
     params.set("chatClientId", chatClientId);
+  }
+
+  if (chatUnknownId) {
+    params.set("chatUnknownId", chatUnknownId);
   }
 
   if (chatSearch) {
@@ -1262,4 +1338,8 @@ function normalizeSearch(value: string) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .trim();
+}
+
+function normalizePhone(value: string) {
+  return value.replace(/\D/g, "");
 }

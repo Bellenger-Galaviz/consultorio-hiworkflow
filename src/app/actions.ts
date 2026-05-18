@@ -6,7 +6,6 @@ import { z } from "zod";
 import { findAppointmentConflict, getNextClientAppointmentNumber } from "@/lib/appointments";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { createAppointmentStatusNotification } from "@/lib/notifications";
 import { sendReminderToN8n } from "@/lib/n8n";
 import { sendAppointmentReminderByType } from "@/lib/reminders";
 import { formatClinicTime, zonedDateTimeToUtc } from "@/lib/timezone";
@@ -128,13 +127,48 @@ export async function createClient(formData: FormData) {
   }
 
   try {
-    await prisma.client.create({
-      data: {
-        userId: user.id,
-        fullName: data.fullName,
-        phone,
-        email: data.email || null,
-        notes: data.notes || null
+    await prisma.$transaction(async (tx) => {
+      const client = await tx.client.create({
+        data: {
+          userId: user.id,
+          fullName: data.fullName,
+          phone,
+          email: data.email || null,
+          notes: data.notes || null
+        }
+      });
+      const unknownContact = await tx.unknownContact.findUnique({
+        where: {
+          userId_phone: {
+            userId: user.id,
+            phone
+          }
+        },
+        include: {
+          messages: {
+            orderBy: { createdAt: "asc" }
+          }
+        }
+      });
+
+      if (unknownContact?.status === "NEW") {
+        if (unknownContact.messages.length > 0) {
+          await tx.chatMessage.createMany({
+            data: unknownContact.messages.map((message) => ({
+              userId: user.id,
+              clientId: client.id,
+              direction: message.direction,
+              message: message.message,
+              intent: message.intent ?? "UNKNOWN_CONTACT_IMPORTED",
+              createdAt: message.createdAt
+            }))
+          });
+        }
+
+        await tx.unknownContact.update({
+          where: { id: unknownContact.id },
+          data: { status: "CONVERTED" }
+        });
       }
     });
   } catch {
@@ -447,8 +481,6 @@ export async function updateAppointmentStatus(formData: FormData) {
   });
 
   const updatedAppointment = { ...appointment, status };
-
-  await createAppointmentStatusNotification(updatedAppointment, status);
 
   if (status === "CANCELLED" || status === "REPROGRAM_PENDING") {
     await notifyWaitlistForAvailableSlot(updatedAppointment);

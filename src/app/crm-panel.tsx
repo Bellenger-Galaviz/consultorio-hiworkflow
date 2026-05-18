@@ -8,6 +8,7 @@ export type CrmThread = {
   count: number;
   fullName: string;
   id: string;
+  kind: "client" | "unknown";
   lastAt: string | null;
   lastMessage: string | null;
   phone: string;
@@ -23,20 +24,20 @@ export type CrmMessage = {
 
 type CrmPanelProps = {
   initialMessages: CrmMessage[];
-  initialSelectedClientId: string | null;
+  initialSelectedThreadId: string | null;
   threads: CrmThread[];
 };
 
 export function CrmPanel({
   initialMessages,
-  initialSelectedClientId,
+  initialSelectedThreadId,
   threads
 }: CrmPanelProps) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [, startTransition] = useTransition();
   const [search, setSearch] = useState("");
-  const [selectedClientId, setSelectedClientId] = useState(initialSelectedClientId);
+  const [selectedThreadId, setSelectedThreadId] = useState(initialSelectedThreadId);
   const [messages, setMessages] = useState(initialMessages);
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState<string | null>(null);
@@ -52,16 +53,21 @@ export function CrmPanel({
 
     return threads.filter((thread) => normalizeSearch(thread.fullName).includes(normalized));
   }, [search, threads]);
-  const selectedClient =
-    threads.find((thread) => thread.id === selectedClientId) ?? filteredThreads[0] ?? null;
+  const selectedThread =
+    threads.find((thread) => thread.id === selectedThreadId) ?? filteredThreads[0] ?? null;
+  const selectedClient = selectedThread?.kind === "client" ? selectedThread : null;
 
-  async function selectClient(clientId: string) {
-    setSelectedClientId(clientId);
+  async function selectThread(thread: CrmThread) {
+    setSelectedThreadId(thread.id);
     setStatus(null);
     setIsLoadingMessages(true);
 
     try {
-      const response = await fetch(`/api/clients/${clientId}/messages`);
+      const response = await fetch(
+        thread.kind === "client"
+          ? `/api/clients/${thread.id}/messages`
+          : `/api/unknown-contacts/${thread.id}/messages`
+      );
       const data = await response.json();
 
       if (!response.ok) {
@@ -142,7 +148,7 @@ export function CrmPanel({
 
         <div className="max-h-[420px] overflow-y-auto rounded-md border border-black/10">
           {filteredThreads.map((client) => {
-            const isSelected = selectedClient?.id === client.id;
+            const isSelected = selectedThread?.id === client.id;
 
             return (
               <button
@@ -150,11 +156,16 @@ export function CrmPanel({
                   isSelected ? "bg-mint" : "bg-white hover:bg-paper"
                 }`}
                 key={client.id}
-                onClick={() => selectClient(client.id)}
+                onClick={() => selectThread(client)}
                 type="button"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <p className="font-semibold">{client.fullName}</p>
+                  <p className="font-semibold">
+                    {client.fullName}
+                    {client.kind === "unknown" ? (
+                      <span className="ml-2 text-xs font-semibold text-leaf">Nuevo</span>
+                    ) : null}
+                  </p>
                   <span className="text-xs font-semibold text-ink/50">{client.count}</span>
                 </div>
                 <p className="mt-1 line-clamp-1 text-sm text-ink/60">
@@ -176,8 +187,8 @@ export function CrmPanel({
 
       <div className="rounded-md border border-black/10 bg-white">
         <div className="border-b border-black/10 px-4 py-3">
-          <p className="font-semibold">{selectedClient?.fullName}</p>
-          <p className="text-sm text-ink/55">{selectedClient?.phone}</p>
+          <p className="font-semibold">{selectedThread?.fullName}</p>
+          <p className="text-sm text-ink/55">{selectedThread?.phone}</p>
         </div>
 
         <div className="grid max-h-[420px] gap-3 overflow-y-auto bg-paper p-4">
@@ -214,6 +225,14 @@ export function CrmPanel({
         <form className="grid gap-2 border-t border-black/10 p-3" onSubmit={sendMessage} ref={formRef}>
           {status ? <p className="text-sm font-semibold text-coral">{status}</p> : null}
           {isSending ? <p className="text-sm font-semibold text-leaf">Enviando...</p> : null}
+          {selectedThread?.kind === "unknown" ? (
+            <a
+              className="secondary-button w-fit"
+              href={`/?newClientPhone=${encodeURIComponent(selectedThread.phone)}#nuevo-cliente`}
+            >
+              Agregar cliente
+            </a>
+          ) : null}
           <label className="sr-only" htmlFor="crm-message">
             Mensaje
           </label>
@@ -224,8 +243,14 @@ export function CrmPanel({
             maxLength={1000}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={submitWithEnter}
-            placeholder={selectedClient ? `Escribe a ${selectedClient.fullName}` : "Selecciona un cliente"}
-            required
+            placeholder={
+              selectedThread?.kind === "unknown"
+                ? "Agrega este contacto para responder"
+                : selectedClient
+                  ? `Escribe a ${selectedClient.fullName}`
+                  : "Selecciona un cliente"
+            }
+            required={Boolean(selectedClient)}
             value={draft}
           />
         </form>

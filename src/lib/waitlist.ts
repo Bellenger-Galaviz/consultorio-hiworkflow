@@ -79,7 +79,11 @@ function minutesToTime(minutes: number) {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
-export async function notifyWaitlistForAvailableSlot(appointment: AppointmentWithClient) {
+export async function notifyWaitlistForAvailableSlot(
+  appointment: AppointmentWithClient,
+  options: { createNotification?: boolean } = {}
+) {
+  const shouldCreateNotification = options.createNotification ?? true;
   const entries = await prisma.waitlistEntry.findMany({
     where: {
       userId: appointment.userId,
@@ -116,20 +120,22 @@ export async function notifyWaitlistForAvailableSlot(appointment: AppointmentWit
       }
     }));
 
-  await prisma.notification.create({
-    data: {
-      userId: appointment.userId,
-      type: "WAITLIST_SLOT_AVAILABLE",
-      title: "Horario disponible para lista de espera",
-      body: `Se liberó ${formatDateTime(appointment.startsAt)} para ${matchingEntries.length} cliente${
-        matchingEntries.length === 1 ? "" : "s"
-      } en lista de espera.`,
-      target: "#lista-espera",
-      appointmentId: appointment.id,
-      waitlistEntryId: matchingEntries[0]?.id,
-      waitlistOpportunityId: opportunity.id
-    }
-  });
+  if (shouldCreateNotification) {
+    await prisma.notification.create({
+      data: {
+        userId: appointment.userId,
+        type: "WAITLIST_SLOT_AVAILABLE",
+        title: "Horario disponible para lista de espera",
+        body: `Se liberó ${formatDateTime(appointment.startsAt)} para ${matchingEntries.length} cliente${
+          matchingEntries.length === 1 ? "" : "s"
+        } en lista de espera.`,
+        target: "#lista-espera",
+        appointmentId: appointment.id,
+        waitlistEntryId: matchingEntries[0]?.id,
+        waitlistOpportunityId: opportunity.id
+      }
+    });
+  }
 
   return opportunity;
 }
@@ -237,18 +243,6 @@ export async function offerWaitlistOpportunity({
       direction: "OUTBOUND",
       message,
       intent: "WAITLIST_OFFER"
-    }
-  });
-
-  await prisma.notification.create({
-    data: {
-      userId,
-      type: "WAITLIST_OFFER_SENT",
-      title: "Oferta enviada",
-      body: `Se ofreció ${formatDateTime(offerStartsAt)} a ${entry.client.fullName}.`,
-      target: "#lista-espera",
-      waitlistEntryId: entry.id,
-      waitlistOpportunityId: opportunity.id
     }
   });
 

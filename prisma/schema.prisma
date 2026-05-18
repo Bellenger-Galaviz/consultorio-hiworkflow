@@ -26,6 +26,38 @@ model Client {
   @@index([userId])
 }
 
+model UnknownContact {
+  id          String                  @id @default(cuid())
+  userId      String
+  phone       String
+  displayName String?
+  status      String                  @default("NEW")
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages    UnknownContactMessage[]
+
+  @@unique([userId, phone])
+  @@index([userId])
+  @@index([status])
+}
+
+model UnknownContactMessage {
+  id               String         @id @default(cuid())
+  userId           String
+  unknownContactId String
+  direction        String
+  message          String
+  intent           String?
+  createdAt        DateTime       @default(now())
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  unknownContact   UnknownContact @relation(fields: [unknownContactId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([unknownContactId])
+  @@index([createdAt])
+}
+
 model Appointment {
   id           String        @id @default(cuid())
   userId      String
@@ -177,6 +209,8 @@ model User {
   waitlistEntries WaitlistEntry[]
   waitlistOpportunities WaitlistOpportunity[]
   notifications Notification[]
+  unknownContacts UnknownContact[]
+  unknownContactMessages UnknownContactMessage[]
 }
 
 model Session {
