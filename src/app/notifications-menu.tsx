@@ -23,6 +23,7 @@ export function NotificationsMenu({ initialNotifications }: NotificationsMenuPro
   const router = useRouter();
   const [notifications, setNotifications] = useState(initialNotifications);
   const [isOpen, setIsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const knownNotificationIds = useRef(new Set(initialNotifications.map((notification) => notification.id)));
   const unreadCount = useMemo(
     () => notifications.filter((notification) => notification.status === "UNREAD").length,
@@ -64,6 +65,26 @@ export function NotificationsMenu({ initialNotifications }: NotificationsMenuPro
     };
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!menuRef.current || menuRef.current.contains(event.target as Node)) {
+        return;
+      }
+
+      setIsOpen(false);
+    }
+
+    document.addEventListener("mousedown", closeOnOutsideClick);
+
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+    };
+  }, [isOpen]);
+
   async function markAsRead() {
     if (unreadCount === 0) {
       return;
@@ -98,7 +119,7 @@ export function NotificationsMenu({ initialNotifications }: NotificationsMenuPro
   }
 
   return (
-    <div className="relative scroll-mt-4" id="notificaciones">
+    <div className="relative scroll-mt-4" id="notificaciones" ref={menuRef}>
       {unreadCount > 0 ? (
         <button
           className="notification-beacon"

@@ -46,7 +46,7 @@ export async function createClientMessageNotification(client: Client, message: s
       userId: client.userId,
       type: "WHATSAPP_CLIENT_MESSAGE",
       title: "Mensaje de cliente",
-      body: `${client.fullName} enviÃ³: "${truncateMessage(message)}".`,
+      body: `${client.fullName} envió: "${truncateMessage(message)}".`,
       target: `/?chatClientId=${client.id}#crm-whatsapp`
     }
   });
@@ -60,8 +60,8 @@ export async function createUnknownContactNotification(
     data: {
       userId: contact.userId,
       type: "WHATSAPP_UNKNOWN_CONTACT",
-      title: "Mensaje de nÃºmero nuevo",
-      body: `${contact.phone} enviÃ³: "${truncateMessage(message)}".`,
+      title: "Mensaje de número nuevo",
+      body: `${contact.phone} envió: "${truncateMessage(message)}".`,
       target: `/?chatUnknownId=${contact.id}#crm-whatsapp`
     }
   });

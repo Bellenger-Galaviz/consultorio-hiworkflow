@@ -246,7 +246,7 @@ async function recordUnknownContactMessage(user: User, phone: string, message: s
     create: {
       userId: user.id,
       phone: normalizedPhone,
-      displayName: `NÃºmero nuevo ${normalizedPhone}`
+      displayName: `Número nuevo ${normalizedPhone}`
     },
     update: {
       status: "NEW"

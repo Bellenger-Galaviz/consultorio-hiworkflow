@@ -198,7 +198,7 @@ export default async function Home({
 
     return {
       count: contact._count.messages,
-      fullName: contact.displayName ?? `NÃºmero nuevo ${contact.phone}`,
+      fullName: formatUnknownContactName(contact.phone),
       id: contact.id,
       kind: "unknown" as const,
       lastAt: lastMessage?.createdAt.toISOString() ?? contact.createdAt.toISOString(),
@@ -1342,4 +1342,8 @@ function normalizeSearch(value: string) {
 
 function normalizePhone(value: string) {
   return value.replace(/\D/g, "");
+}
+
+function formatUnknownContactName(phone: string) {
+  return `Número nuevo ${phone}`;
 }
