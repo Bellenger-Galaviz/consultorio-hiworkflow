@@ -896,6 +896,24 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
 
   const { appointment } = found;
   const hasResponseContext = await hasAppointmentResponseContext(appointment);
+  const agentIntent = input.agent?.intent;
+  const effectiveIntent =
+    intent !== "UNKNOWN"
+      ? intent
+      : agentIntent === "CONFIRM"
+        ? "CONFIRM"
+        : agentIntent === "CANCEL"
+          ? "CANCEL"
+          : agentIntent === "REPROGRAM_REQUEST"
+            ? "REPROGRAM_REQUEST"
+            : intent;
+  const hasAgentAppointmentIntent =
+    agentIntent === "AVAILABILITY_QUERY" ||
+    agentIntent === "REPROGRAM_DATETIME" ||
+    agentIntent === "OPTION_SELECTION";
+  const hasAppointmentIntent = effectiveIntent !== "UNKNOWN" || hasAgentAppointmentIntent;
+  const effectiveHasResponseContext =
+    hasResponseContext || appointment.status === "REPROGRAM_PENDING" || hasAppointmentIntent;
 
   await prisma.chatMessage.create({
     data: {
@@ -912,13 +930,13 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   const proposedDate = proposedDateResult.date;
   const selectedOption = getSelectedOptionFromMessage(input.message, input.agent);
 
-  if (appointment.status === "REPROGRAM_PENDING" && hasResponseContext && selectedOption) {
+  if (appointment.status === "REPROGRAM_PENDING" && effectiveHasResponseContext && selectedOption) {
     return selectOfferedAvailabilityOption(appointment, selectedOption);
   }
 
   if (
     appointment.status === "REPROGRAM_PENDING" &&
-    hasResponseContext &&
+    effectiveHasResponseContext &&
     input.agent?.intent === "AVAILABILITY_QUERY"
   ) {
     if (input.agent.normalizedDateTime) {
@@ -965,8 +983,8 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
 
   if (
     appointment.status === "REPROGRAM_PENDING" &&
-    hasResponseContext &&
-    intent === "UNKNOWN" &&
+    effectiveHasResponseContext &&
+    effectiveIntent === "UNKNOWN" &&
     isAvailabilityFollowUp(input.message)
   ) {
     const previousState = await prisma.whatsappAgentState.findUnique({
@@ -991,7 +1009,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
 
   if (
     appointment.status === "REPROGRAM_PENDING" &&
-    hasResponseContext &&
+    effectiveHasResponseContext &&
     input.agent?.intent === "REPROGRAM_DATETIME" &&
     input.agent.normalizedDateTime
   ) {
@@ -1006,14 +1024,14 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
 
   if (
     appointment.status === "REPROGRAM_PENDING" &&
-    hasResponseContext &&
-    intent === "UNKNOWN" &&
+    effectiveHasResponseContext &&
+    effectiveIntent === "UNKNOWN" &&
     !proposedDate
   ) {
     return askForReprogramDateAgain(appointment, proposedDateResult.error);
   }
 
-  if (!hasResponseContext || intent === "UNKNOWN") {
+  if (!effectiveHasResponseContext || effectiveIntent === "UNKNOWN") {
     await createClientMessageNotification(appointment.client, input.message);
 
     return { ok: true, action: "CLIENT_MESSAGE_RECORDED", appointmentId: appointment.id };
@@ -1024,7 +1042,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
       return reprogramAppointment(appointment, proposedDate);
     }
 
-    if (intent === "REPROGRAM_REQUEST") {
+    if (effectiveIntent === "REPROGRAM_REQUEST") {
       const reprogrammingAppointment = await prisma.appointment.update({
         where: { id: appointment.id },
         data: { status: "REPROGRAM_PENDING" },
@@ -1032,10 +1050,13 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
       });
       await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
 
-      return askForPreferredReprogramTime(reprogrammingAppointment);
+      return askForPreferredReprogramTime(reprogrammingAppointment, {
+        rangeStart: input.agent?.rangeStart,
+        rangeEnd: input.agent?.rangeEnd
+      });
     }
 
-    if (intent === "CONFIRM") {
+    if (effectiveIntent === "CONFIRM") {
       const message = `${appointment.client.fullName}, esa cita ya fue cancelada y no se puede volver a activar con CONFIRMO. Responde REPROGRAMAR si quieres agendar una nueva fecha.`;
 
       await reply(appointment, message, "CANCELLED_CONFIRM_REJECTED");
@@ -1054,7 +1075,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     return reprogramAppointment(appointment, proposedDate);
   }
 
-  if (appointment.status === "REPROGRAM_PENDING" && intent === "CONFIRM") {
+  if (appointment.status === "REPROGRAM_PENDING" && effectiveIntent === "CONFIRM") {
     const message = `${appointment.client.fullName}, esta cita está pendiente de reprogramación. Dime qué día y hora te gustaría, por ejemplo "mañana a las 9 am" o "la próxima semana por la tarde".`;
 
     await reply(appointment, message, "REPROGRAM_CONFIRM_REJECTED");
@@ -1062,7 +1083,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     return { ok: true, action: "REPROGRAM_CONFIRM_REJECTED", appointmentId: appointment.id };
   }
 
-  if (intent === "CONFIRM") {
+  if (effectiveIntent === "CONFIRM") {
     const confirmedAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
       data: { status: "CONFIRMED" },
@@ -1079,7 +1100,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     return { ok: true, action: "CONFIRMED", appointmentId: appointment.id };
   }
 
-  if (intent === "CANCEL") {
+  if (effectiveIntent === "CANCEL") {
     const cancelledAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
       data: { status: "CANCELLED" },
@@ -1097,7 +1118,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     return { ok: true, action: "CANCELLED", appointmentId: appointment.id };
   }
 
-  if (intent === "REPROGRAM_REQUEST") {
+  if (effectiveIntent === "REPROGRAM_REQUEST") {
     const reprogrammingAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
       data: { status: "REPROGRAM_PENDING" },
@@ -1106,7 +1127,10 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
     await notifyWaitlistForAvailableSlot(reprogrammingAppointment);
 
-    return askForPreferredReprogramTime(reprogrammingAppointment);
+    return askForPreferredReprogramTime(reprogrammingAppointment, {
+      rangeStart: input.agent?.rangeStart,
+      rangeEnd: input.agent?.rangeEnd
+    });
   }
 
   await createClientMessageNotification(appointment.client, input.message);
