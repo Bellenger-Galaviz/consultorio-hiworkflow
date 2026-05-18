@@ -9,6 +9,11 @@ type AppointmentWithClient = Appointment & {
   client: Client;
 };
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const REMINDER_24H_WINDOW_MS =
+  Number(process.env.REMINDER_24H_WINDOW_MIN ?? 90) * 60 * 1000;
+
 export function buildReminderMessage(appointment: AppointmentWithClient, type: ReminderType) {
   if (type === "REMINDER_24H") {
     return `Hola ${appointment.client.fullName}, te recordamos que tienes una cita "${appointment.title}" programada para ${formatDateTime(
@@ -100,7 +105,7 @@ export async function sendAppointmentReminderByType(
 
 export async function sendDueAutomaticReminders() {
   const now = new Date();
-  const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const next24Hours = new Date(now.getTime() + DAY_MS);
 
   const appointments = await prisma.appointment.findMany({
     where: {
@@ -121,8 +126,11 @@ export async function sendDueAutomaticReminders() {
 
   for (const appointment of appointments) {
     const msUntilStart = appointment.startsAt.getTime() - now.getTime();
+    const isIn24HourReminderWindow =
+      msUntilStart > DAY_MS - REMINDER_24H_WINDOW_MS && msUntilStart <= DAY_MS;
+    const isIn1HourReminderWindow = msUntilStart > 0 && msUntilStart <= HOUR_MS;
 
-    if (msUntilStart <= 24 * 60 * 60 * 1000) {
+    if (isIn24HourReminderWindow) {
       results.push({
         appointmentId: appointment.id,
         type: "REMINDER_24H",
@@ -130,7 +138,7 @@ export async function sendDueAutomaticReminders() {
       });
     }
 
-    if (appointment.status === "PENDING" && msUntilStart <= 60 * 60 * 1000) {
+    if (appointment.status === "PENDING" && isIn1HourReminderWindow) {
       results.push({
         appointmentId: appointment.id,
         type: "REMINDER_1H",

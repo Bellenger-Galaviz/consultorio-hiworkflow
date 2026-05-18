@@ -9,6 +9,7 @@ import {
 } from "@/lib/notifications";
 import { sendReminderToN8n } from "@/lib/n8n";
 import { zonedDateTimeToUtc } from "@/lib/timezone";
+import { formatInputDate } from "@/lib/timezone";
 import {
   bookWaitlistOffer,
   declineWaitlistOffer,
@@ -23,7 +24,19 @@ type AppointmentWithClient = Appointment & {
 type IncomingMessage = {
   phone: string;
   message: string;
+  agent?: {
+    intent?: string;
+    normalizedDateTime?: string;
+    rangeStart?: string;
+    rangeEnd?: string;
+    period?: string;
+    selectedOption?: number;
+  };
 };
+
+type DateTimeParseResult =
+  | { date: Date; error: null }
+  | { date: null; error: "INVALID_FORMAT" | "INVALID_DATE" | "PAST_DATE" };
 
 const APPOINTMENT_CONTEXT_INTENTS = new Set([
   "MANUAL",
@@ -34,6 +47,8 @@ const APPOINTMENT_CONTEXT_INTENTS = new Set([
   "ASK_REPROGRAM_DATE",
   "REPROGRAM_CONFIRM_REPLY",
   "REPROGRAM_CONFLICT_REPLY",
+  "REPROGRAM_DATE_FORMAT_RETRY",
+  "AVAILABILITY_OPTIONS",
   "REPROGRAM_CONFIRM_REJECTED",
   "CANCELLED_CONFIRM_REJECTED",
   "CANCELLED_FALLBACK_REPLY",
@@ -70,7 +85,7 @@ function detectIntent(text: string) {
     return "CANCEL";
   }
 
-  if (/\b(reprogramar|cambiar|mover|posponer|pospongo|no puedo)\b/.test(normalized)) {
+  if (/\b(reprogram\w*|reagend\w*|cambiar|mover|posponer|pospongo|aplazar|no puedo)\b/.test(normalized)) {
     return "REPROGRAM_REQUEST";
   }
 
@@ -93,43 +108,85 @@ function isWaitlistDecline(text: string) {
   return /\b(no|paso|no puedo|cancelar|cancelo)\b/.test(normalized);
 }
 
-function parseSpanishDateTime(text: string) {
+function parseSpanishDateTime(text: string): DateTimeParseResult {
   const normalized = normalizeText(text);
   const match = normalized.match(
-    /(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\s+(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/
+    /\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\s+(\d{1,2}):(\d{2})\b/
   );
 
   if (!match) {
-    return null;
+    return { date: null, error: "INVALID_FORMAT" };
   }
 
   const now = new Date();
   const day = Number(match[1]);
-  const month = Number(match[2]) - 1;
-  const yearPart = match[3] ? Number(match[3]) : now.getFullYear();
-  const year = yearPart < 100 ? 2000 + yearPart : yearPart;
-  let hour = Number(match[4]);
-  const minute = match[5] ? Number(match[5]) : 0;
-  const meridiem = match[6];
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const daysInMonth = month >= 1 && month <= 12 ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 0;
 
-  if (meridiem === "pm" && hour < 12) {
-    hour += 12;
-  }
-
-  if (meridiem === "am" && hour === 12) {
-    hour = 0;
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return { date: null, error: "INVALID_DATE" };
   }
 
   const date = zonedDateTimeToUtc(
-    `${String(year).padStart(4, "0")}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
     `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`
   );
 
-  if (Number.isNaN(date.getTime()) || date <= now) {
-    return null;
+  if (Number.isNaN(date.getTime())) {
+    return { date: null, error: "INVALID_DATE" };
   }
 
-  return date;
+  if (date <= now) {
+    return { date: null, error: "PAST_DATE" };
+  }
+
+  return { date, error: null };
+}
+
+function addDaysToInputDate(day: string, days: number) {
+  const [year, month, date] = day.split("-").map(Number);
+  const utc = new Date(Date.UTC(year, month - 1, date + days, 12, 0, 0, 0));
+
+  return [
+    String(utc.getUTCFullYear()).padStart(4, "0"),
+    String(utc.getUTCMonth() + 1).padStart(2, "0"),
+    String(utc.getUTCDate()).padStart(2, "0")
+  ].join("-");
+}
+
+function timeToMinutes(time: string) {
+  const [hour, minute] = time.split(":").map(Number);
+
+  return hour * 60 + minute;
+}
+
+function minutesToTime(minutes: number) {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function getSelectedOptionFromMessage(message: string, agent?: IncomingMessage["agent"]) {
+  if (agent?.selectedOption && agent.selectedOption > 0) {
+    return agent.selectedOption;
+  }
+
+  const match = normalizeText(message).match(/^(?:opcion\s*)?(\d{1,2})\b/);
+
+  return match ? Number(match[1]) : null;
 }
 
 async function findActiveAppointment(phone: string) {
@@ -364,10 +421,18 @@ async function reprogramAppointment(appointment: AppointmentWithClient, proposed
   });
 
   if (conflict) {
-    const message =
-      "Ese horario ya estÃ¡ ocupado. Por favor responde con otra fecha y hora en formato DD/MM/AAAA HH:mm.";
+    const alternatives = await findAvailableReprogramSlots({
+      appointment,
+      rangeStart: formatInputDate(proposedDate),
+      rangeEnd: addDaysToInputDate(formatInputDate(proposedDate), 14)
+    });
+    const message = alternatives.length
+      ? `Ese horario ya estÃ¡ ocupado. Estos son horarios disponibles cercanos:\n\n${alternatives
+          .map((slot, index) => `${index + 1}. ${formatDateTime(slot)}`)
+          .join("\n")}\n\nResponde con el nÃºmero de la opciÃ³n que prefieres o pregunta por otro rango.`
+      : "Ese horario ya estÃ¡ ocupado y no encontrÃ© espacios cercanos disponibles. Pregunta por otra semana, otro mes o responde con otra fecha y hora.";
 
-    await reply(appointment, message, "REPROGRAM_CONFLICT_REPLY");
+    await reply(appointment, message, alternatives.length ? "AVAILABILITY_OPTIONS" : "REPROGRAM_CONFLICT_REPLY");
 
     return { ok: true, action: "REPROGRAM_CONFLICT", appointmentId: appointment.id };
   }
@@ -396,6 +461,153 @@ async function reprogramAppointment(appointment: AppointmentWithClient, proposed
     action: "REPROGRAMMED",
     appointmentId: appointment.id
   };
+}
+
+async function findAvailableReprogramSlots({
+  appointment,
+  rangeStart,
+  rangeEnd,
+  period,
+  limit = 3
+}: {
+  appointment: AppointmentWithClient;
+  rangeStart?: string;
+  rangeEnd?: string;
+  period?: string;
+  limit?: number;
+}) {
+  const now = new Date();
+  const today = formatInputDate(now);
+  const startDay = rangeStart && /^\d{4}-\d{2}-\d{2}$/.test(rangeStart) ? rangeStart : today;
+  const endDay =
+    rangeEnd && /^\d{4}-\d{2}-\d{2}$/.test(rangeEnd)
+      ? rangeEnd
+      : addDaysToInputDate(startDay, 21);
+  const workStart = timeToMinutes(process.env.AI_AGENT_BUSINESS_START ?? "09:00");
+  const workEnd = timeToMinutes(process.env.AI_AGENT_BUSINESS_END ?? "19:00");
+  const stepMin = Number(process.env.AI_AGENT_SLOT_STEP_MIN ?? 15);
+  const availableDays = new Set(
+    (process.env.AI_AGENT_WORK_DAYS ?? "1,2,3,4,5,6")
+      .split(",")
+      .map((item) => Number(item.trim()))
+  );
+  const periodStart =
+    period === "morning" ? timeToMinutes("06:00") : period === "afternoon" ? timeToMinutes("12:00") : 0;
+  const periodEnd =
+    period === "morning"
+      ? timeToMinutes("12:00")
+      : period === "afternoon"
+        ? timeToMinutes("19:00")
+        : period === "evening"
+          ? timeToMinutes("23:59")
+          : 24 * 60;
+  const slots: Date[] = [];
+
+  for (let day = startDay; day <= endDay && slots.length < limit; day = addDaysToInputDate(day, 1)) {
+    const dayOfWeek = new Date(`${day}T12:00:00Z`).getUTCDay();
+
+    if (!availableDays.has(dayOfWeek)) {
+      continue;
+    }
+
+    const latestStart = workEnd - appointment.durationMin;
+    const startMin = Math.max(workStart, periodStart);
+    const endMin = Math.min(latestStart, periodEnd - appointment.durationMin);
+
+    for (let minutes = startMin; minutes <= endMin && slots.length < limit; minutes += stepMin) {
+      const startsAt = zonedDateTimeToUtc(day, minutesToTime(minutes));
+
+      if (startsAt <= now) {
+        continue;
+      }
+
+      const conflict = await findAppointmentConflict({
+        userId: appointment.userId,
+        startsAt,
+        durationMin: appointment.durationMin,
+        ignoreAppointmentId: appointment.id
+      });
+
+      if (!conflict) {
+        slots.push(startsAt);
+      }
+    }
+  }
+
+  return slots;
+}
+
+function buildAvailabilityMessage(appointment: AppointmentWithClient, slots: Date[]) {
+  if (!slots.length) {
+    return `${appointment.client.fullName}, no encontré horarios disponibles en ese rango. Puedes preguntar por otra semana, otro mes o responder con una fecha específica.`;
+  }
+
+  const options = slots
+    .map((slot, index) => `${index + 1}. ${formatDateTime(slot)}`)
+    .join("\n");
+
+  return `${appointment.client.fullName}, encontré estos horarios disponibles:\n\n${options}\n\nResponde con el número de la opción que prefieres o pregunta por otro rango.`;
+}
+
+async function replyWithAvailabilityOptions(
+  appointment: AppointmentWithClient,
+  options?: { rangeStart?: string; rangeEnd?: string; period?: string }
+) {
+  const slots = await findAvailableReprogramSlots({
+    appointment,
+    rangeStart: options?.rangeStart,
+    rangeEnd: options?.rangeEnd,
+    period: options?.period
+  });
+
+  const message = buildAvailabilityMessage(appointment, slots);
+
+  await reply(appointment, message, "AVAILABILITY_OPTIONS");
+
+  return { ok: true, action: "SENT_AVAILABILITY_OPTIONS", appointmentId: appointment.id };
+}
+
+async function selectOfferedAvailabilityOption(
+  appointment: AppointmentWithClient,
+  selectedOption: number
+) {
+  const latestOptions = await prisma.chatMessage.findFirst({
+    where: {
+      appointmentId: appointment.id,
+      direction: "OUTBOUND",
+      intent: "AVAILABILITY_OPTIONS"
+    },
+    orderBy: { createdAt: "desc" }
+  });
+
+  const matches = [...(latestOptions?.message ?? "").matchAll(/^\s*(\d+)\.\s+(\d{2}\/\d{2}\/\d{4},?\s+\d{2}:\d{2})/gm)];
+  const option = matches.find((match) => Number(match[1]) === selectedOption);
+
+  if (!option) {
+    return replyWithAvailabilityOptions(appointment);
+  }
+
+  const parseResult = parseSpanishDateTime(option[2].replace(",", ""));
+
+  if (!parseResult.date) {
+    return replyWithAvailabilityOptions(appointment);
+  }
+
+  return reprogramAppointment(appointment, parseResult.date);
+}
+
+async function askForReprogramDateAgain(
+  appointment: AppointmentWithClient,
+  reason: DateTimeParseResult["error"]
+) {
+  const message =
+    reason === "PAST_DATE"
+      ? `${appointment.client.fullName}, la fecha y hora que enviaste ya pasaron. Por favor responde con una fecha futura en formato DD/MM/AAAA HH:mm, por ejemplo 25/05/2026 16:30.`
+      : `${appointment.client.fullName}, no pude identificar una fecha y hora válida. Por favor responde exactamente con el formato DD/MM/AAAA HH:mm, por ejemplo 25/05/2026 16:30.`;
+
+  await reply(appointment, message, "REPROGRAM_DATE_FORMAT_RETRY");
+
+  return { ok: true, action: "ASKED_REPROGRAM_DATE_FORMAT", appointmentId: appointment.id };
 }
 
 export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
@@ -473,7 +685,49 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     }
   });
 
-  const proposedDate = parseSpanishDateTime(input.message);
+  const proposedDateResult = parseSpanishDateTime(input.message);
+  const proposedDate = proposedDateResult.date;
+  const selectedOption = getSelectedOptionFromMessage(input.message, input.agent);
+
+  if (appointment.status === "REPROGRAM_PENDING" && hasResponseContext && selectedOption) {
+    return selectOfferedAvailabilityOption(appointment, selectedOption);
+  }
+
+  if (
+    appointment.status === "REPROGRAM_PENDING" &&
+    hasResponseContext &&
+    input.agent?.intent === "AVAILABILITY_QUERY"
+  ) {
+    return replyWithAvailabilityOptions(appointment, {
+      rangeStart: input.agent.rangeStart,
+      rangeEnd: input.agent.rangeEnd,
+      period: input.agent.period
+    });
+  }
+
+  if (
+    appointment.status === "REPROGRAM_PENDING" &&
+    hasResponseContext &&
+    input.agent?.intent === "REPROGRAM_DATETIME" &&
+    input.agent.normalizedDateTime
+  ) {
+    const agentDateResult = parseSpanishDateTime(input.agent.normalizedDateTime);
+
+    if (agentDateResult.date) {
+      return reprogramAppointment(appointment, agentDateResult.date);
+    }
+
+    return askForReprogramDateAgain(appointment, agentDateResult.error);
+  }
+
+  if (
+    appointment.status === "REPROGRAM_PENDING" &&
+    hasResponseContext &&
+    intent === "UNKNOWN" &&
+    !proposedDate
+  ) {
+    return askForReprogramDateAgain(appointment, proposedDateResult.error);
+  }
 
   if (!hasResponseContext || intent === "UNKNOWN") {
     await createClientMessageNotification(appointment.client, input.message);
@@ -487,18 +741,14 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     }
 
     if (intent === "REPROGRAM_REQUEST") {
-      const reprogramAppointment = await prisma.appointment.update({
+      const reprogrammingAppointment = await prisma.appointment.update({
         where: { id: appointment.id },
         data: { status: "REPROGRAM_PENDING" },
         include: { client: true }
       });
-      await createAppointmentStatusNotification(reprogramAppointment, "REPROGRAM_PENDING");
+      await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
 
-      const message = `Claro ${appointment.client.fullName}. Esta cita estaba cancelada; para reprogramarla responde con la nueva fecha y hora en formato DD/MM/AAAA HH:mm, por ejemplo 25/05/2026 16:30.`;
-
-      await reply(appointment, message, "ASK_REPROGRAM_DATE");
-
-      return { ok: true, action: "ASKED_REPROGRAM_DATE", appointmentId: appointment.id };
+      return replyWithAvailabilityOptions(reprogrammingAppointment);
     }
 
     if (intent === "CONFIRM") {
@@ -564,19 +814,15 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   }
 
   if (intent === "REPROGRAM_REQUEST") {
-    const reprogramAppointment = await prisma.appointment.update({
+    const reprogrammingAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
       data: { status: "REPROGRAM_PENDING" },
       include: { client: true }
     });
-    await createAppointmentStatusNotification(reprogramAppointment, "REPROGRAM_PENDING");
-    await notifyWaitlistForAvailableSlot(reprogramAppointment);
+    await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
+    await notifyWaitlistForAvailableSlot(reprogrammingAppointment);
 
-    const message = `Claro ${appointment.client.fullName}. Responde con la nueva fecha y hora en formato DD/MM/AAAA HH:mm, por ejemplo 25/05/2026 16:30.`;
-
-    await reply(appointment, message, "ASK_REPROGRAM_DATE");
-
-    return { ok: true, action: "ASKED_REPROGRAM_DATE", appointmentId: appointment.id };
+    return replyWithAvailabilityOptions(reprogrammingAppointment);
   }
 
   await createClientMessageNotification(appointment.client, input.message);

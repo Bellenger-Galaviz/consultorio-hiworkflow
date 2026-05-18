@@ -8,7 +8,17 @@ const incomingSchema = z.object({
   number: z.string().min(8).optional(),
   message: z.string().min(1).optional(),
   text: z.string().min(1).optional(),
-  body: z.string().min(1).optional()
+  body: z.string().min(1).optional(),
+  agent: z
+    .object({
+      intent: z.string().optional(),
+      normalizedDateTime: z.string().optional(),
+      rangeStart: z.string().optional(),
+      rangeEnd: z.string().optional(),
+      period: z.string().optional(),
+      selectedOption: z.number().optional()
+    })
+    .optional()
 });
 
 export async function POST(request: Request) {
@@ -32,7 +42,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Missing phone or message" }, { status: 400 });
   }
 
-  const result = await handleIncomingWhatsAppMessage({ phone, message }).catch((error) => ({
+  const result = await handleIncomingWhatsAppMessage({ phone, message, agent: parsed.data.agent }).catch((error) => ({
     ok: false,
     error: error instanceof Error ? error.message : "Unknown error"
   }));
