@@ -25,6 +25,21 @@ type IncomingMessage = {
   message: string;
 };
 
+const APPOINTMENT_CONTEXT_INTENTS = new Set([
+  "MANUAL",
+  "REMINDER_24H",
+  "REMINDER_1H",
+  "CONFIRM_REPLY",
+  "CANCEL_REPLY",
+  "ASK_REPROGRAM_DATE",
+  "REPROGRAM_CONFIRM_REPLY",
+  "REPROGRAM_CONFLICT_REPLY",
+  "REPROGRAM_CONFIRM_REJECTED",
+  "CANCELLED_CONFIRM_REJECTED",
+  "CANCELLED_FALLBACK_REPLY",
+  "FALLBACK_REPLY"
+]);
+
 function normalizePhone(phone: string) {
   return phone.replace(/\D/g, "");
 }
@@ -299,6 +314,21 @@ async function recordMessageWithoutActiveAppointment(input: IncomingMessage, int
   };
 }
 
+async function hasAppointmentResponseContext(appointment: AppointmentWithClient) {
+  const latestOutbound = await prisma.chatMessage.findFirst({
+    where: {
+      appointmentId: appointment.id,
+      direction: "OUTBOUND"
+    },
+    orderBy: { createdAt: "desc" },
+    select: { intent: true }
+  });
+
+  return Boolean(
+    latestOutbound?.intent && APPOINTMENT_CONTEXT_INTENTS.has(latestOutbound.intent)
+  );
+}
+
 async function reply(appointment: AppointmentWithClient, message: string, intent: string) {
   await prisma.chatMessage.create({
     data: {
@@ -419,6 +449,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   }
 
   const { appointment } = found;
+  const hasResponseContext = await hasAppointmentResponseContext(appointment);
 
   await prisma.chatMessage.create({
     data: {
@@ -432,6 +463,12 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   });
 
   const proposedDate = parseSpanishDateTime(input.message);
+
+  if (!hasResponseContext || intent === "UNKNOWN") {
+    await createClientMessageNotification(appointment.client, input.message);
+
+    return { ok: true, action: "CLIENT_MESSAGE_RECORDED", appointmentId: appointment.id };
+  }
 
   if (appointment.status === "CANCELLED") {
     if (proposedDate) {
@@ -531,10 +568,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     return { ok: true, action: "ASKED_REPROGRAM_DATE", appointmentId: appointment.id };
   }
 
-  const fallback = `Gracias por tu mensaje. Responde CONFIRMO para confirmar, CANCELAR para cancelar o REPROGRAMAR para cambiar tu cita.`;
-
-  await reply(appointment, fallback, "FALLBACK_REPLY");
   await createClientMessageNotification(appointment.client, input.message);
 
-  return { ok: true, action: "FALLBACK", appointmentId: appointment.id };
+  return { ok: true, action: "CLIENT_MESSAGE_RECORDED", appointmentId: appointment.id };
 }
