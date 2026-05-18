@@ -59,6 +59,10 @@ function normalizePhone(phone: string) {
   return phone.replace(/\D/g, "");
 }
 
+function getClientFirstName(client: Client) {
+  return client.fullName.trim().split(/\s+/)[0] || client.fullName;
+}
+
 function isGroupMessageSender(value: string) {
   const raw = value.toLowerCase();
   const normalized = normalizePhone(value);
@@ -594,15 +598,17 @@ async function findAvailableReprogramSlots({
 }
 
 function buildAvailabilityMessage(appointment: AppointmentWithClient, slots: Date[]) {
+  const clientName = getClientFirstName(appointment.client);
+
   if (!slots.length) {
-    return `${appointment.client.fullName}, no encontré horarios disponibles en ese rango. Puedes preguntar por otra semana, otro mes o responder con una fecha específica.`;
+    return `${clientName}, por ahora no encontré horarios disponibles en ese rango. Puedes preguntarme por otra semana, otro mes o una fecha específica.`;
   }
 
   const options = slots
     .map((slot, index) => `${index + 1}. ${formatDateTime(slot)}`)
     .join("\n");
 
-  return `${appointment.client.fullName}, encontré estos horarios disponibles:\n\n${options}\n\nResponde con el número de la opción que prefieres. Si quieres más alternativas, dime "más opciones" o pregunta por otro rango.`;
+  return `${clientName}, estos son algunos espacios disponibles:\n\n${options}\n\nResponde con el número de la opción que prefieras. Si buscas otro horario, dime por ejemplo "más tarde", "por la mañana" u otra semana.`;
 }
 
 async function replyWithAvailabilityOptions(
@@ -679,7 +685,7 @@ async function askForPreferredReprogramTime(
     options?.rangeStart && options.rangeEnd
       ? " dentro de ese rango"
       : "";
-  const message = `${appointment.client.fullName}, claro. ¿Qué día y hora te gustaría${rangeText}? Puedes responder algo como "mañana a las 9 am", "martes a las 16:00" o "la próxima semana por la tarde".`;
+  const message = `${getClientFirstName(appointment.client)}, con gusto. ¿Qué día u horario prefieres${rangeText}? Puedes responder algo como "mañana a las 9 am", "martes a las 16:00" o "la próxima semana por la tarde".`;
 
   await reply(appointment, message, "ASK_REPROGRAM_DATE");
 
@@ -949,13 +955,6 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
       return askForReprogramDateAgain(appointment, exactDateResult.error);
     }
 
-    if ((input.agent.rangeStart || input.agent.rangeEnd) && !input.agent.period) {
-      return askForPreferredReprogramTime(appointment, {
-        rangeStart: input.agent.rangeStart,
-        rangeEnd: input.agent.rangeEnd
-      });
-    }
-
     const previousState = await prisma.whatsappAgentState.findUnique({
       where: {
         appointmentId_topic: {
@@ -1050,6 +1049,14 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
       });
       await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
 
+      if (input.agent?.rangeStart || input.agent?.rangeEnd || input.agent?.period) {
+        return replyWithAvailabilityOptions(reprogrammingAppointment, {
+          rangeStart: input.agent.rangeStart,
+          rangeEnd: input.agent.rangeEnd,
+          period: input.agent.period
+        });
+      }
+
       return askForPreferredReprogramTime(reprogrammingAppointment, {
         rangeStart: input.agent?.rangeStart,
         rangeEnd: input.agent?.rangeEnd
@@ -1126,6 +1133,14 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
     });
     await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
     await notifyWaitlistForAvailableSlot(reprogrammingAppointment);
+
+    if (input.agent?.rangeStart || input.agent?.rangeEnd || input.agent?.period) {
+      return replyWithAvailabilityOptions(reprogrammingAppointment, {
+        rangeStart: input.agent.rangeStart,
+        rangeEnd: input.agent.rangeEnd,
+        period: input.agent.period
+      });
+    }
 
     return askForPreferredReprogramTime(reprogrammingAppointment, {
       rangeStart: input.agent?.rangeStart,
