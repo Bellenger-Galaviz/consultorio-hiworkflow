@@ -1,4 +1,4 @@
-import type { Appointment, Client, User } from "@prisma/client";
+﻿import type { Appointment, Client, User } from "@prisma/client";
 import { findAppointmentConflict } from "@/lib/appointments";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
@@ -44,6 +44,13 @@ function normalizePhone(phone: string) {
   return phone.replace(/\D/g, "");
 }
 
+function isGroupMessageSender(value: string) {
+  const raw = value.toLowerCase();
+  const normalized = normalizePhone(value);
+
+  return raw.includes("@g.us") || raw.includes("group") || normalized.length > 15;
+}
+
 function normalizeText(text: string) {
   return text
     .toLowerCase()
@@ -77,7 +84,7 @@ function detectIntent(text: string) {
 function isWaitlistConfirm(text: string) {
   const normalized = normalizeText(text);
 
-  return /\b(si|sí|confirmo|acepto|quiero|agendalo|agendar)\b/.test(normalized);
+  return /\b(si|sÃ­|confirmo|acepto|quiero|agendalo|agendar)\b/.test(normalized);
 }
 
 function isWaitlistDecline(text: string) {
@@ -358,7 +365,7 @@ async function reprogramAppointment(appointment: AppointmentWithClient, proposed
 
   if (conflict) {
     const message =
-      "Ese horario ya está ocupado. Por favor responde con otra fecha y hora en formato DD/MM/AAAA HH:mm.";
+      "Ese horario ya estÃ¡ ocupado. Por favor responde con otra fecha y hora en formato DD/MM/AAAA HH:mm.";
 
     await reply(appointment, message, "REPROGRAM_CONFLICT_REPLY");
 
@@ -392,6 +399,10 @@ async function reprogramAppointment(appointment: AppointmentWithClient, proposed
 }
 
 export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
+  if (isGroupMessageSender(input.phone)) {
+    return { ok: true, action: "IGNORED_GROUP_MESSAGE" };
+  }
+
   const found = await findActiveAppointment(input.phone);
   const waitlistOffer = await findPendingWaitlistOfferByPhone(input.phone);
   const intent = detectIntent(input.message);
@@ -498,7 +509,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
       return { ok: true, action: "CANCELLED_CONFIRM_REJECTED", appointmentId: appointment.id };
     }
 
-    const message = `${appointment.client.fullName}, esa cita está cancelada. Responde REPROGRAMAR si quieres agendar una nueva fecha.`;
+    const message = `${appointment.client.fullName}, esa cita estÃ¡ cancelada. Responde REPROGRAMAR si quieres agendar una nueva fecha.`;
 
     await reply(appointment, message, "CANCELLED_FALLBACK_REPLY");
 
@@ -510,7 +521,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   }
 
   if (appointment.status === "REPROGRAM_PENDING" && intent === "CONFIRM") {
-    const message = `${appointment.client.fullName}, esta cita está pendiente de reprogramación. Responde con la nueva fecha y hora en formato DD/MM/AAAA HH:mm para dejarla agendada.`;
+    const message = `${appointment.client.fullName}, esta cita estÃ¡ pendiente de reprogramaciÃ³n. Responde con la nueva fecha y hora en formato DD/MM/AAAA HH:mm para dejarla agendada.`;
 
     await reply(appointment, message, "REPROGRAM_CONFIRM_REJECTED");
 
@@ -543,7 +554,7 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
 
     const message = `Entendido ${appointment.client.fullName}, tu cita "${appointment.title}" del ${formatDateTime(
       appointment.startsAt
-    )} quedó cancelada.`;
+    )} quedÃ³ cancelada.`;
 
     await reply(appointment, message, "CANCEL_REPLY");
     await createAppointmentStatusNotification(cancelledAppointment, "CANCELLED");
