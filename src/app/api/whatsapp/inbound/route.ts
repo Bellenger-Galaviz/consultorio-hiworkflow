@@ -12,13 +12,14 @@ const incomingSchema = z.object({
   deliveryMode: z.enum(["SEND", "COLLECT"]).optional(),
   agent: z
     .object({
-      intent: z.string().optional(),
-      normalizedDateTime: z.string().optional(),
-      rangeStart: z.string().optional(),
-      rangeEnd: z.string().optional(),
-      period: z.string().optional(),
-      selectedOption: z.number().optional()
+      intent: z.string().nullish(),
+      normalizedDateTime: z.string().nullish(),
+      rangeStart: z.string().nullish(),
+      rangeEnd: z.string().nullish(),
+      period: z.string().nullish(),
+      selectedOption: z.number().nullish()
     })
+    .nullable()
     .optional()
 });
 
@@ -38,6 +39,16 @@ export async function POST(request: Request) {
 
   const phone = parsed.data.phone ?? parsed.data.from ?? parsed.data.number;
   const message = parsed.data.message ?? parsed.data.text ?? parsed.data.body;
+  const agent = parsed.data.agent
+    ? {
+        intent: parsed.data.agent.intent ?? undefined,
+        normalizedDateTime: parsed.data.agent.normalizedDateTime ?? undefined,
+        rangeStart: parsed.data.agent.rangeStart ?? undefined,
+        rangeEnd: parsed.data.agent.rangeEnd ?? undefined,
+        period: parsed.data.agent.period ?? undefined,
+        selectedOption: parsed.data.agent.selectedOption ?? undefined
+      }
+    : undefined;
 
   if (!phone || !message) {
     return NextResponse.json({ ok: false, error: "Missing phone or message" }, { status: 400 });
@@ -47,7 +58,7 @@ export async function POST(request: Request) {
     phone,
     message,
     deliveryMode: parsed.data.deliveryMode,
-    agent: parsed.data.agent
+    agent
   }).catch((error) => ({
     ok: false,
     error: error instanceof Error ? error.message : "Unknown error"
