@@ -16,18 +16,18 @@ const REMINDER_24H_WINDOW_MS =
 
 export function buildReminderMessage(appointment: AppointmentWithClient, type: ReminderType) {
   if (type === "REMINDER_24H") {
-    return `Hola ${appointment.client.fullName}, te recordamos que tienes una cita "${appointment.title}" programada para ${formatDateTime(
+    return `Hola ${appointment.client.fullName}, le recordamos su cita "${appointment.title}" programada para ${formatDateTime(
       appointment.startsAt
-    )}. Responde CONFIRMO para confirmar, CANCELAR para cancelar o REPROGRAMAR para cambiar la fecha.`;
+    )}. Puede responder a este mensaje para confirmar, cancelar o solicitar un cambio de fecha.`;
   }
 
   if (type === "REMINDER_1H") {
-    return `Hola ${appointment.client.fullName}, tu cita "${appointment.title}" es en aproximadamente 1 hora. Responde CONFIRMO para confirmar, CANCELAR para cancelar o REPROGRAMAR para cambiar la fecha.`;
+    return `Hola ${appointment.client.fullName}, su cita "${appointment.title}" es en aproximadamente 1 hora. Si necesita confirmar, cancelar o cambiar la fecha, puede responder por este medio.`;
   }
 
-  return `Hola ${appointment.client.fullName}, te recordamos tu cita "${appointment.title}" programada para ${formatDateTime(
+  return `Hola ${appointment.client.fullName}, le recordamos su cita "${appointment.title}" programada para ${formatDateTime(
     appointment.startsAt
-  )}. Responde CONFIRMO para confirmar, CANCELAR para cancelar o REPROGRAMAR para cambiar la fecha.`;
+  )}. Puede responder a este mensaje para confirmar, cancelar o solicitar un cambio de fecha.`;
 }
 
 export async function sendAppointmentReminderByType(
