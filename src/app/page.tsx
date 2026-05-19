@@ -636,13 +636,9 @@ function WeeklyCalendar({
         const dayAppointments = appointments.filter(
           (appointment) => formatInputDate(appointment.startsAt) === day
         );
-        const isSelected = day === selectedDay;
-
         return (
           <Link
-            className={`min-h-40 rounded-md border p-3 ${
-              isSelected ? "border-leaf bg-white shadow-[inset_0_0_0_1px_rgba(18,158,192,0.18)]" : "border-black/10 bg-white hover:bg-paper"
-            }`}
+            className="min-h-40 rounded-md border border-black/10 bg-white p-3 hover:bg-paper focus:outline-none focus:ring-0"
             href={buildHomeHref({ day })}
             key={day}
           >
