@@ -1,5 +1,6 @@
 import type { Appointment, Client, WaitlistEntry, WaitlistOpportunity } from "@prisma/client";
 import { findAppointmentConflict, getNextClientAppointmentNumber } from "@/lib/appointments";
+import { logAppointmentEvent } from "@/lib/appointment-events";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { sendReminderToN8n } from "@/lib/n8n";
@@ -383,6 +384,17 @@ export async function bookWaitlistOffer(opportunity: OpportunityWithEntry) {
           notes: entry.notes ? `Desde lista de espera. ${entry.notes}` : "Desde lista de espera."
         }
       });
+
+  await logAppointmentEvent({
+    appointmentId: appointment.id,
+    type: fallbackAppointment ? "REPROGRAMMED" : "CREATED",
+    userId: opportunity.userId
+  });
+  await logAppointmentEvent({
+    appointmentId: appointment.id,
+    type: "CONFIRMED",
+    userId: opportunity.userId
+  });
 
   await prisma.waitlistEntry.update({
     where: { id: entry.id },

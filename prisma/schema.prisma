@@ -77,6 +77,7 @@ model Appointment {
   client      Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
   reminders   ReminderLog[]
   chatMessages ChatMessage[]
+  events      AppointmentEvent[]
   fallbackWaitlistEntries WaitlistEntry[] @relation("WaitlistFallbackAppointment")
   whatsappAgentStates WhatsappAgentState[]
 
@@ -209,6 +210,7 @@ model User {
   attendances  Attendance[]
   reminders    ReminderLog[]
   chatMessages ChatMessage[]
+  appointmentEvents AppointmentEvent[]
   whatsappAgentStates WhatsappAgentState[]
   waitlistEntries WaitlistEntry[]
   waitlistOpportunities WaitlistOpportunity[]
@@ -251,6 +253,21 @@ model ChatMessage {
   @@index([appointmentId])
   @@index([waitlistEntryId])
   @@index([waitlistOpportunityId])
+  @@index([createdAt])
+}
+
+model AppointmentEvent {
+  id            String      @id @default(cuid())
+  userId        String
+  appointmentId String
+  type          String
+  label         String
+  createdAt     DateTime    @default(now())
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([appointmentId])
   @@index([createdAt])
 }
 

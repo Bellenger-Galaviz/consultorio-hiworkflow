@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { findAppointmentConflict, getNextClientAppointmentNumber } from "@/lib/appointments";
+import { logAppointmentEvent } from "@/lib/appointment-events";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { sendReminderToN8n } from "@/lib/n8n";
@@ -301,7 +302,7 @@ export async function createAppointment(formData: FormData) {
   try {
     const clientAppointmentNumber = await getNextClientAppointmentNumber(data.clientId);
 
-    await prisma.appointment.create({
+    const appointment = await prisma.appointment.create({
       data: {
         userId: user.id,
         clientId: data.clientId,
@@ -312,6 +313,7 @@ export async function createAppointment(formData: FormData) {
         notes: data.notes || null
       }
     });
+    await logAppointmentEvent({ appointmentId: appointment.id, type: "CREATED", userId: user.id });
   } catch {
     goHomeWithError("No se pudo agendar la cita. Intenta de nuevo.");
   }
@@ -391,6 +393,7 @@ export async function createWaitlistEntry(formData: FormData) {
           : "Cita de respaldo vinculada a lista de espera."
       }
     });
+    await logAppointmentEvent({ appointmentId: fallbackAppointment.id, type: "CREATED", userId: user.id });
 
     fallbackAppointmentId = fallbackAppointment.id;
   }
@@ -479,6 +482,7 @@ export async function updateAppointmentStatus(formData: FormData) {
     where: { id: appointment.id },
     data: { status, statusChangedAt: new Date() }
   });
+  await logAppointmentEvent({ appointmentId: appointment.id, type: status, userId: user.id });
 
   const updatedAppointment = { ...appointment, status };
 
