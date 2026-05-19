@@ -19,6 +19,8 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const REMINDER_24H_WINDOW_MS =
   Number(process.env.REMINDER_24H_WINDOW_MIN ?? 90) * 60 * 1000;
+const ACTIVE_CHAT_SUPPRESSION_MS =
+  Number(process.env.REMINDER_ACTIVE_CHAT_SUPPRESSION_MIN ?? 30) * 60 * 1000;
 
 export function buildReminderMessage(appointment: AppointmentWithClient, type: ReminderType) {
   if (type === "REMINDER_24H") {
@@ -41,6 +43,21 @@ export async function sendAppointmentReminderByType(
   type: ReminderType
 ) {
   if (type !== "MANUAL") {
+    const recentChat = await prisma.chatMessage.findFirst({
+      where: {
+        appointmentId: appointment.id,
+        userId: appointment.userId,
+        createdAt: {
+          gte: new Date(Date.now() - ACTIVE_CHAT_SUPPRESSION_MS)
+        }
+      },
+      select: { id: true }
+    });
+
+    if (recentChat) {
+      return { skipped: true, reason: "ACTIVE_CHAT" };
+    }
+
     const previous = await prisma.reminderLog.findFirst({
       where: {
         appointmentId: appointment.id,

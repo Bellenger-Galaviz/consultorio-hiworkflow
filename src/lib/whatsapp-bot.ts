@@ -763,7 +763,7 @@ async function reprogramAppointment(appointment: AppointmentWithClient, proposed
     const message = alternatives.length
       ? `Ese horario ya está ocupado. Estos son horarios disponibles cercanos:\n\n${alternatives
           .map((slot, index) => `${index + 1}. ${formatDateTime(slot)}`)
-          .join("\n")}\n\nResponde con el nÃºmero de la opciÃ³n que prefieres o pregunta por otro rango.`
+          .join("\n")}\n\nResponde con el número de la opción que prefieras o dime qué otro día u horario te gustaría revisar.`
       : "Ese horario ya está ocupado y no encontré espacios cercanos disponibles. Pregunta por otra semana, otro mes o responde con otra fecha y hora.";
 
     await reply(appointment, message, alternatives.length ? "AVAILABILITY_OPTIONS" : "REPROGRAM_CONFLICT_REPLY");
@@ -777,6 +777,7 @@ async function reprogramAppointment(appointment: AppointmentWithClient, proposed
       previousStartsAt: appointment.previousStartsAt ?? appointment.startsAt,
       startsAt: proposedDate,
       status: "PENDING",
+      statusChangedAt: new Date(),
       notes: `${appointment.notes ?? ""}\nReprogramada de ${formatDateTime(appointment.startsAt)} a ${formatDateTime(
         proposedDate
       )}.`.trim()
@@ -1000,7 +1001,7 @@ async function replyWithRangeAvailabilityQuestion(
     const options = slots
       .map((slot, index) => `${index + 1}. ${formatDateTime(slot)}`)
       .join("\n");
-    const message = `${clientName}, sí hay disponibilidad ${range.label}. Estas son las opciones más cercanas:\n\n${options}\n\nPuede elegir una opción con los botones.`;
+    const message = `${clientName}, sí hay disponibilidad ${range.label}. Estas son las opciones más cercanas:\n\n${options}\n\nResponde con el número de la opción que prefieras o dime qué otro horario te gustaría revisar.`;
 
     await reply(appointment, message, "AVAILABILITY_OPTIONS", buildSlotButtons(slots));
     await prisma.whatsappAgentState.upsert({
@@ -1041,7 +1042,7 @@ async function replyWithRangeAvailabilityQuestion(
   const message = alternatives.length
     ? `${clientName}, no tengo disponibilidad ${range.label}. Lo más cercano que encontré después es:\n\n${alternatives
         .map((slot, index) => `${index + 1}. ${formatDateTime(slot)}`)
-        .join("\n")}\n\nResponde con el número de la opción que prefieras o dime otro rango.`
+        .join("\n")}\n\nResponde con el número de la opción que prefieras o dime qué otro rango te gustaría revisar.`
     : `${clientName}, no tengo disponibilidad ${range.label} ni encontré espacios cercanos después. Puedes preguntarme por otra semana u otro mes.`;
 
   await reply(
@@ -1109,7 +1110,7 @@ async function askForPreferredReprogramTime(
     options?.rangeStart && options.rangeEnd
       ? " dentro de ese rango"
       : "";
-  const message = `${getClientFirstName(appointment.client)}, con gusto. ¿Qué día u horario prefieres${rangeText}? Puedes responder algo como "mañana a las 9 am", "martes a las 16:00" o "la próxima semana por la tarde".`;
+  const message = `${getClientFirstName(appointment.client)}, con gusto. ¿Para qué día u horario te gustaría reprogramarla${rangeText}? Puedes decirme algo como "mañana a las 9 am", "martes a las 16:00" o "la próxima semana por la tarde".`;
 
   await reply(appointment, message, "ASK_REPROGRAM_DATE");
 
@@ -1127,7 +1128,7 @@ async function replyWithExactAvailability(appointment: AppointmentWithClient, pr
   if (!conflict) {
     const message = `${appointment.client.fullName}, sí, ${formatDateTime(
       proposedDate
-    )} está disponible. Puede elegirlo con el botón.`;
+    )} está disponible. Si quieres tomar ese horario, respóndeme que sí lo agendemos.`;
 
     await reply(appointment, message, "AVAILABILITY_OPTIONS", [{ id: "SLOT_1", displayText: "Elegir horario" }]);
     await prisma.whatsappAgentState.upsert({
@@ -1166,7 +1167,7 @@ async function replyWithExactAvailability(appointment: AppointmentWithClient, pr
         proposedDate
       )} ya está ocupado. Ese día tengo estos horarios disponibles:\n\n${alternatives
         .map((slot, index) => `${index + 1}. ${formatDateTime(slot)}`)
-        .join("\n")}\n\nResponde con el número de la opción que prefieres o dime otra fecha.`
+        .join("\n")}\n\nResponde con el número de la opción que prefieras o dime otra fecha.`
     : `${appointment.client.fullName}, no, ${formatDateTime(
         proposedDate
       )} ya está ocupado y no encontré otro espacio disponible ese día. Puedes preguntarme por otro día u otro rango.`;
@@ -1496,7 +1497,7 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
     if (proposedDate && asksAvailability) {
       const reprogrammingAppointment = await prisma.appointment.update({
         where: { id: appointment.id },
-        data: { status: "REPROGRAM_PENDING" },
+        data: { status: "REPROGRAM_PENDING", statusChangedAt: new Date() },
         include: { client: true }
       });
       await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
@@ -1511,7 +1512,7 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
     if (effectiveIntent === "REPROGRAM_REQUEST") {
       const reprogrammingAppointment = await prisma.appointment.update({
         where: { id: appointment.id },
-        data: { status: "REPROGRAM_PENDING" },
+        data: { status: "REPROGRAM_PENDING", statusChangedAt: new Date() },
         include: { client: true }
       });
       await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
@@ -1520,18 +1521,18 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
         return replyWithRangeAvailabilityQuestion(reprogrammingAppointment, requestedRange);
       }
 
-      return replyWithAvailabilityOptions(reprogrammingAppointment);
+      return askForPreferredReprogramTime(reprogrammingAppointment);
     }
 
     if (effectiveIntent === "CONFIRM") {
-      const message = `${appointment.client.fullName}, esa cita ya fue cancelada y no se puede volver a activar con CONFIRMO. Responde REPROGRAMAR si quieres agendar una nueva fecha.`;
+      const message = `${appointment.client.fullName}, esa cita ya fue cancelada y no puedo reactivarla directamente. Si quieres agendar una nueva fecha, dime qué día y horario te gustaría.`;
 
       await reply(appointment, message, "CANCELLED_CONFIRM_REJECTED");
 
       return { ok: true, action: "CANCELLED_CONFIRM_REJECTED", appointmentId: appointment.id };
     }
 
-    const message = `${appointment.client.fullName}, esa cita está cancelada. Responde REPROGRAMAR si quieres agendar una nueva fecha.`;
+    const message = `${appointment.client.fullName}, esa cita está cancelada. Si quieres agendar una nueva fecha, dime qué día y horario te gustaría.`;
 
     await reply(appointment, message, "CANCELLED_FALLBACK_REPLY");
 
@@ -1543,6 +1544,20 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
   }
 
   if (appointment.status === "REPROGRAM_PENDING" && effectiveIntent === "CONFIRM") {
+    const state = await prisma.whatsappAgentState.findUnique({
+      where: {
+        appointmentId_topic: {
+          appointmentId: appointment.id,
+          topic: "REPROGRAM"
+        }
+      }
+    });
+    const offeredSlots = Array.isArray(state?.offeredSlots) ? state.offeredSlots : [];
+
+    if (offeredSlots.length === 1) {
+      return selectOfferedAvailabilityOption(appointment, 1);
+    }
+
     const message = `${appointment.client.fullName}, esta cita está pendiente de reprogramación. Dime qué día y hora te gustaría, por ejemplo "mañana a las 9 am" o "la próxima semana por la tarde".`;
 
     await reply(appointment, message, "REPROGRAM_CONFIRM_REJECTED");
@@ -1553,7 +1568,7 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
   if (effectiveIntent === "CONFIRM") {
     const confirmedAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
-      data: { status: "CONFIRMED" },
+      data: { status: "CONFIRMED", statusChangedAt: new Date() },
       include: { client: true }
     });
     await createAppointmentStatusNotification(confirmedAppointment, "CONFIRMED");
@@ -1570,7 +1585,7 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
   if (effectiveIntent === "CANCEL") {
     const cancelledAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
-      data: { status: "CANCELLED" },
+      data: { status: "CANCELLED", statusChangedAt: new Date() },
       include: { client: true }
     });
 
@@ -1588,7 +1603,7 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
   if (effectiveIntent === "REPROGRAM_REQUEST") {
     const reprogrammingAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
-      data: { status: "REPROGRAM_PENDING" },
+      data: { status: "REPROGRAM_PENDING", statusChangedAt: new Date() },
       include: { client: true }
     });
     await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
@@ -1598,7 +1613,7 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
       return replyWithRangeAvailabilityQuestion(reprogrammingAppointment, requestedRange);
     }
 
-    return replyWithAvailabilityOptions(reprogrammingAppointment);
+    return askForPreferredReprogramTime(reprogrammingAppointment);
   }
 
   await createClientMessageNotification(appointment.client, input.message);

@@ -435,7 +435,9 @@ export default async function Home({
                       </td>
                       <td className="px-3 py-3">
                         <StatusCell
+                          createdAt={appointment.createdAt}
                           previousStartsAt={appointment.previousStartsAt}
+                          statusChangedAt={appointment.statusChangedAt}
                           status={appointment.status}
                         />
                       </td>
@@ -917,24 +919,50 @@ function DateCell({
 }
 
 function StatusCell({
+  createdAt,
   previousStartsAt,
+  statusChangedAt,
   status
 }: {
+  createdAt: Date;
   previousStartsAt?: Date | null;
+  statusChangedAt?: Date | null;
   status: string;
 }) {
+  const statusDetail = getAppointmentStatusDetail(status, statusChangedAt ?? createdAt);
+
   return (
-    <div className="flex flex-wrap gap-2">
-      <span className={`status-pill ${statusClass[status]}`}>
-        {getStatusLabel(status)}
-      </span>
-      {previousStartsAt ? (
-        <span className={`status-pill ${statusClass.REPROGRAMMED}`}>
-          Reprogramada
+    <div className="grid gap-1.5">
+      <div className="flex flex-wrap gap-2">
+        <span className={`status-pill ${statusClass[status]}`}>
+          {getStatusLabel(status)}
         </span>
-      ) : null}
+        {previousStartsAt ? (
+          <span className={`status-pill ${statusClass.REPROGRAMMED}`}>
+            Reprogramada
+          </span>
+        ) : null}
+      </div>
+      <div className="text-xs leading-relaxed text-ink/55">
+        <p>Creada: {formatDateTime(createdAt)}</p>
+        {statusDetail ? <p>{statusDetail}</p> : null}
+      </div>
     </div>
   );
+}
+
+function getAppointmentStatusDetail(status: string, changedAt: Date) {
+  const labels: Record<string, string> = {
+    CONFIRMED: "Confirmada",
+    CANCELLED: "Cancelada",
+    ATTENDED: "Marcada como asistida",
+    MISSED: "Marcada como no asistió",
+    REPROGRAM_PENDING: "Pospuesta",
+    PENDING: "Última actualización"
+  };
+  const label = labels[status];
+
+  return label ? `${label}: ${formatDateTime(changedAt)}` : null;
 }
 
 type ChatThread = {

@@ -477,7 +477,7 @@ export async function updateAppointmentStatus(formData: FormData) {
 
   await prisma.appointment.update({
     where: { id: appointment.id },
-    data: { status }
+    data: { status, statusChangedAt: new Date() }
   });
 
   const updatedAppointment = { ...appointment, status };

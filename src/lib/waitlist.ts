@@ -363,6 +363,7 @@ export async function bookWaitlistOffer(opportunity: OpportunityWithEntry) {
           startsAt: appointmentStartsAt,
           durationMin: entry.durationMin,
           status: "CONFIRMED",
+          statusChangedAt: new Date(),
           notes: `${fallbackAppointment.notes ?? ""}\nAdelantada desde lista de espera de ${formatDateTime(
             fallbackAppointment.startsAt
           )} a ${formatDateTime(appointmentStartsAt)}.`.trim()
@@ -378,6 +379,7 @@ export async function bookWaitlistOffer(opportunity: OpportunityWithEntry) {
           startsAt: appointmentStartsAt,
           durationMin: entry.durationMin,
           status: "CONFIRMED",
+          statusChangedAt: new Date(),
           notes: entry.notes ? `Desde lista de espera. ${entry.notes}` : "Desde lista de espera."
         }
       });
