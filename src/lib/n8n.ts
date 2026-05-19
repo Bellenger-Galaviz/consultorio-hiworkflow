@@ -3,8 +3,13 @@ import type { Appointment, Client } from "@prisma/client";
 type ReminderPayload = {
   client: Client;
   appointment?: Appointment | null;
+  buttons?: Array<{
+    id: string;
+    displayText: string;
+  }>;
   event?: string;
   message: string;
+  title?: string;
 };
 
 export async function sendReminderToN8n(payload: ReminderPayload) {
@@ -41,7 +46,9 @@ export async function sendReminderToN8n(payload: ReminderPayload) {
       whatsapp: {
         to: payload.client.phone,
         message: payload.message,
-        text: payload.message
+        text: payload.message,
+        title: payload.title,
+        buttons: payload.buttons
       }
     })
   });

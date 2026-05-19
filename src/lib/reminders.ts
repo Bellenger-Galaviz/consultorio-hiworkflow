@@ -9,6 +9,12 @@ type AppointmentWithClient = Appointment & {
   client: Client;
 };
 
+const REMINDER_BUTTONS = [
+  { id: "CONFIRMAR_CITA", displayText: "Confirmar" },
+  { id: "CANCELAR_CITA", displayText: "Cancelar" },
+  { id: "REPROGRAMAR_CITA", displayText: "Cambiar fecha" }
+];
+
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const REMINDER_24H_WINDOW_MS =
@@ -55,7 +61,9 @@ export async function sendAppointmentReminderByType(
     const response = await sendReminderToN8n({
       client: appointment.client,
       appointment,
-      message
+      buttons: REMINDER_BUTTONS,
+      message,
+      title: "Recordatorio de cita"
     });
 
     const log = await prisma.reminderLog.create({
