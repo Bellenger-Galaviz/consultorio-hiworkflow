@@ -641,7 +641,7 @@ function WeeklyCalendar({
         return (
           <Link
             className={`min-h-40 rounded-md border p-3 ${
-              isSelected ? "border-leaf bg-mint/60" : "border-black/10 bg-white hover:bg-paper"
+              isSelected ? "border-leaf bg-white shadow-[inset_0_0_0_1px_rgba(18,158,192,0.18)]" : "border-black/10 bg-white hover:bg-paper"
             }`}
             href={buildHomeHref({ day })}
             key={day}
