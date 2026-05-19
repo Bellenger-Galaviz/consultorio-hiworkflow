@@ -881,7 +881,7 @@ async function reprogramAppointment(appointment: AppointmentWithClient, proposed
     userId: updatedAppointment.userId
   });
 
-  const message = `Listo ${appointment.client.fullName}, registramos tu nueva cita "${appointment.title}" para ${formatDateTime(
+  const message = `Sí, tenemos ese horario disponible. Ya dejé tu cita "${appointment.title}" reprogramada para ${formatDateTime(
     proposedDate
   )}.`;
 
@@ -1144,6 +1144,7 @@ async function replyWithRangeAvailabilityQuestion(
     const message = days.length
       ? `${clientName}, sí tengo disponibilidad ${range.label}${periodText}. ¿Qué día y horario te gustaría revisar?`
       : `${clientName}, no encontré disponibilidad ${range.label}${periodText}. Si quieres, puedo revisar otra semana, otro horario o un día específico.`;
+    await reply(appointment, message, days.length ? "AVAILABILITY_DAYS" : "REPROGRAM_CONFLICT_REPLY");
     await prisma.whatsappAgentState.upsert({
       where: {
         appointmentId_topic: {
