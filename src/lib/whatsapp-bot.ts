@@ -1,4 +1,5 @@
-﻿import type { Appointment, Client, User } from "@prisma/client";
+﻿import { AsyncLocalStorage } from "node:async_hooks";
+import type { Appointment, Client, User } from "@prisma/client";
 import { findAppointmentConflict, getAppointmentEnd } from "@/lib/appointments";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
@@ -24,6 +25,7 @@ type AppointmentWithClient = Appointment & {
 type IncomingMessage = {
   phone: string;
   message: string;
+  deliveryMode?: "SEND" | "COLLECT";
   agent?: {
     intent?: string;
     normalizedDateTime?: string;
@@ -38,6 +40,21 @@ type WhatsappButton = {
   id: string;
   displayText: string;
 };
+
+type CollectedReply = {
+  to: string;
+  message: string;
+  intent: string;
+  clientName: string;
+  appointmentTitle?: string;
+  appointmentStartsAt?: Date;
+  buttons?: WhatsappButton[];
+};
+
+const replyContext = new AsyncLocalStorage<{
+  mode: "SEND" | "COLLECT";
+  replies: CollectedReply[];
+}>();
 
 type DateTimeParseResult =
   | { date: Date; error: null }
@@ -705,6 +722,21 @@ async function reply(
     }
   });
 
+  const context = replyContext.getStore();
+  if (context?.mode === "COLLECT") {
+    context.replies.push({
+      to: appointment.client.phone,
+      message,
+      intent,
+      buttons,
+      clientName: appointment.client.fullName,
+      appointmentTitle: appointment.title,
+      appointmentStartsAt: appointment.startsAt
+    });
+
+    return;
+  }
+
   await sendReminderToN8n({
     buttons,
     client: appointment.client,
@@ -1236,7 +1268,7 @@ async function askForReprogramDateAgain(
   return { ok: true, action: "ASKED_REPROGRAM_DATE_FORMAT", appointmentId: appointment.id };
 }
 
-export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
+async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
   if (isGroupMessageSender(input.phone)) {
     return { ok: true, action: "IGNORED_GROUP_MESSAGE" };
   }
@@ -1572,4 +1604,24 @@ export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
   await createClientMessageNotification(appointment.client, input.message);
 
   return { ok: true, action: "CLIENT_MESSAGE_RECORDED", appointmentId: appointment.id };
+}
+
+export async function handleIncomingWhatsAppMessage(input: IncomingMessage) {
+  const context = {
+    mode: input.deliveryMode ?? "SEND",
+    replies: [] as CollectedReply[]
+  };
+
+  return replyContext.run(context, async () => {
+    const result = await handleIncomingWhatsAppMessageCore(input);
+
+    if (context.mode === "COLLECT") {
+      return {
+        ...result,
+        replies: context.replies
+      };
+    }
+
+    return result;
+  });
 }

@@ -9,6 +9,7 @@ const incomingSchema = z.object({
   message: z.string().min(1).optional(),
   text: z.string().min(1).optional(),
   body: z.string().min(1).optional(),
+  deliveryMode: z.enum(["SEND", "COLLECT"]).optional(),
   agent: z
     .object({
       intent: z.string().optional(),
@@ -42,7 +43,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Missing phone or message" }, { status: 400 });
   }
 
-  const result = await handleIncomingWhatsAppMessage({ phone, message, agent: parsed.data.agent }).catch((error) => ({
+  const result = await handleIncomingWhatsAppMessage({
+    phone,
+    message,
+    deliveryMode: parsed.data.deliveryMode,
+    agent: parsed.data.agent
+  }).catch((error) => ({
     ok: false,
     error: error instanceof Error ? error.message : "Unknown error"
   }));
