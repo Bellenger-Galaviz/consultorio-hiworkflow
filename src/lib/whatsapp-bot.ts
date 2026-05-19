@@ -377,6 +377,10 @@ function inferRequestedTime(message: string) {
   return minutesToTime(hour * 60 + minute);
 }
 
+function hasExplicitTime(message: string) {
+  return inferRequestedTime(message) !== null;
+}
+
 function inferRequestedDay(message: string, preferredRange?: { rangeStart?: string | null; rangeEnd?: string | null }) {
   const normalized = normalizeText(message);
   const today = formatInputDate(new Date());
@@ -1125,21 +1129,10 @@ async function replyWithRangeAvailabilityQuestion(
       period: range.period
     });
     const clientName = getClientFirstName(appointment.client);
-    const periodText =
-      range.period === "morning"
-        ? " por la mañana"
-        : range.period === "afternoon"
-          ? " por la tarde"
-          : range.period === "evening"
-            ? " por la noche"
-            : "";
+    const periodText = getPeriodText(range.period);
     const message = days.length
-      ? `${clientName}, sí tengo disponibilidad ${range.label}${periodText}. Estos son los días con espacio:\n\n${days
-          .map((day, index) => `${index + 1}. ${formatAvailabilityDay(day)}`)
-          .join("\n")}\n\nDime qué día prefieres y a qué hora te gustaría revisar.`
+      ? `${clientName}, sí tengo disponibilidad ${range.label}${periodText}. ¿Qué día y horario te gustaría revisar?`
       : `${clientName}, no encontré disponibilidad ${range.label}${periodText}. Si quieres, puedo revisar otra semana, otro horario o un día específico.`;
-
-    await reply(appointment, message, days.length ? "AVAILABILITY_DAYS" : "REPROGRAM_CONFLICT_REPLY");
     await prisma.whatsappAgentState.upsert({
       where: {
         appointmentId_topic: {
@@ -1173,17 +1166,16 @@ async function replyWithRangeAvailabilityQuestion(
     rangeStart: range.rangeStart,
     rangeEnd: range.rangeEnd,
     period: range.period,
-    limit: 3
+    limit: 1
   });
   const clientName = getClientFirstName(appointment.client);
 
   if (slots.length) {
-    const options = slots
-      .map((slot, index) => `${index + 1}. ${formatDateTime(slot)}`)
-      .join("\n");
-    const message = `${clientName}, sí hay disponibilidad ${range.label}. Estas son las opciones más cercanas:\n\n${options}\n\nDime cuál te funciona o qué otro horario te gustaría revisar.`;
+    const message = `${clientName}, sí tengo disponibilidad ${range.label}${getPeriodText(
+      range.period
+    )}. ¿A qué hora te gustaría?`;
 
-    await reply(appointment, message, "AVAILABILITY_OPTIONS", buildSlotButtons(slots));
+    await reply(appointment, message, "AVAILABILITY_DAYS");
     await prisma.whatsappAgentState.upsert({
       where: {
         appointmentId_topic: {
@@ -1209,7 +1201,7 @@ async function replyWithRangeAvailabilityQuestion(
       }
     });
 
-    return { ok: true, action: "SENT_RANGE_AVAILABILITY_OPTIONS", appointmentId: appointment.id };
+    return { ok: true, action: "ASKED_TIME_FOR_AVAILABLE_RANGE", appointmentId: appointment.id };
   }
 
   const alternatives = await findAvailableReprogramSlots({
@@ -1257,6 +1249,64 @@ async function replyWithRangeAvailabilityQuestion(
   });
 
   return { ok: true, action: "ANSWERED_RANGE_AVAILABILITY", appointmentId: appointment.id };
+}
+
+function getPeriodText(period?: string) {
+  return period === "morning"
+    ? " por la mañana"
+    : period === "afternoon"
+      ? " por la tarde"
+      : period === "evening"
+        ? " por la noche"
+        : "";
+}
+
+async function askForTimeOnRequestedDay(
+  appointment: AppointmentWithClient,
+  day: string,
+  period?: string
+) {
+  const slots = await findAvailableReprogramSlots({
+    appointment,
+    rangeEnd: day,
+    rangeStart: day,
+    period,
+    limit: 1
+  });
+  const clientName = getClientFirstName(appointment.client);
+  const dayLabel = formatAvailabilityDay(day);
+  const periodText = getPeriodText(period);
+  const message = slots.length
+    ? `${clientName}, sí tengo disponibilidad el ${dayLabel}${periodText}. ¿A qué hora te gustaría?`
+    : `${clientName}, no encontré disponibilidad el ${dayLabel}${periodText}. Si quieres, puedo revisar otro día u otro horario.`;
+
+  await reply(appointment, message, slots.length ? "AVAILABILITY_DAYS" : "REPROGRAM_CONFLICT_REPLY");
+  await prisma.whatsappAgentState.upsert({
+    where: {
+      appointmentId_topic: {
+        appointmentId: appointment.id,
+        topic: "REPROGRAM"
+      }
+    },
+    create: {
+      userId: appointment.userId,
+      clientId: appointment.clientId,
+      appointmentId: appointment.id,
+      topic: "REPROGRAM",
+      rangeStart: day,
+      rangeEnd: day,
+      period,
+      offeredSlots: []
+    },
+    update: {
+      rangeStart: day,
+      rangeEnd: day,
+      period,
+      offeredSlots: []
+    }
+  });
+
+  return { ok: true, action: "ASKED_TIME_FOR_REQUESTED_DAY", appointmentId: appointment.id };
 }
 
 async function askForPreferredReprogramTime(
@@ -1590,6 +1640,14 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
     rangeStart: requestedRange?.rangeStart ?? previousState?.rangeStart,
     rangeEnd: requestedRange?.rangeEnd ?? previousState?.rangeEnd
   });
+  const explicitTime = hasExplicitTime(input.message);
+  const requestedDayWithoutTime =
+    !explicitTime && getMentionedWeekday(input.message) !== null
+      ? inferRequestedDay(input.message, {
+          rangeStart: requestedRange?.rangeStart ?? previousState?.rangeStart,
+          rangeEnd: requestedRange?.rangeEnd ?? previousState?.rangeEnd
+        })
+      : null;
   const selectedOption = getSelectedOptionFromMessage(input.message, input.agent);
   const asksAvailability = isAvailabilityQuestion(input.message) || input.agent?.intent === "AVAILABILITY_QUERY";
   const correctedWeekdayDate =
@@ -1606,6 +1664,10 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
 
   if (appointment.status === "REPROGRAM_PENDING" && effectiveHasResponseContext && selectedOption) {
     return selectOfferedAvailabilityOption(appointment, selectedOption);
+  }
+
+  if (appointment.status === "REPROGRAM_PENDING" && effectiveHasResponseContext && requestedDayWithoutTime) {
+    return askForTimeOnRequestedDay(appointment, requestedDayWithoutTime, requestedPeriod ?? previousState?.period ?? undefined);
   }
 
   if (appointment.status === "REPROGRAM_PENDING" && effectiveHasResponseContext && proposedDate && asksAvailability) {
@@ -1630,6 +1692,19 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
       const exactDateResult = parseSpanishDateTime(input.agent.normalizedDateTime);
 
       if (exactDateResult.date) {
+        if (!explicitTime && getMentionedWeekday(input.message) !== null) {
+          const day =
+            requestedDayWithoutTime ??
+            inferRequestedDay(input.message, {
+              rangeStart: requestedRange?.rangeStart ?? previousState?.rangeStart,
+              rangeEnd: requestedRange?.rangeEnd ?? previousState?.rangeEnd
+            });
+
+          if (day) {
+            return askForTimeOnRequestedDay(appointment, day, requestedPeriod ?? previousState?.period ?? undefined);
+          }
+        }
+
         return replyWithExactAvailability(appointment, exactDateResult.date);
       }
 
@@ -1680,6 +1755,19 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
     const agentDateResult = parseSpanishDateTime(input.agent.normalizedDateTime);
 
     if (agentDateResult.date) {
+      if (!explicitTime && getMentionedWeekday(input.message) !== null) {
+        const day =
+          requestedDayWithoutTime ??
+          inferRequestedDay(input.message, {
+            rangeStart: requestedRange?.rangeStart ?? previousState?.rangeStart,
+            rangeEnd: requestedRange?.rangeEnd ?? previousState?.rangeEnd
+          });
+
+        if (day) {
+          return askForTimeOnRequestedDay(appointment, day, requestedPeriod ?? previousState?.period ?? undefined);
+        }
+      }
+
       const correctedAgentDate =
         correctDateByMentionedWeekday(input.message, agentDateResult.date, {
           rangeStart: requestedRange?.rangeStart ?? previousState?.rangeStart,
@@ -1712,6 +1800,22 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
   }
 
   if (appointment.status === "CANCELLED") {
+    if (requestedDayWithoutTime) {
+      const reprogrammingAppointment = await prisma.appointment.update({
+        where: { id: appointment.id },
+        data: { status: "REPROGRAM_PENDING", statusChangedAt: new Date() },
+        include: { client: true }
+      });
+      await logAppointmentEvent({
+        appointmentId: reprogrammingAppointment.id,
+        type: "REPROGRAM_PENDING",
+        userId: reprogrammingAppointment.userId
+      });
+      await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
+
+      return askForTimeOnRequestedDay(reprogrammingAppointment, requestedDayWithoutTime, requestedPeriod ?? previousState?.period ?? undefined);
+    }
+
     if (requestedRange && asksAvailability) {
       const reprogrammingAppointment = await prisma.appointment.update({
         where: { id: appointment.id },
