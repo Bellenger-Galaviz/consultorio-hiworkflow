@@ -117,6 +117,23 @@ function isAvailabilityQuestion(text: string) {
   );
 }
 
+function hasReprogramLanguage(text: string) {
+  const normalized = normalizeText(text);
+
+  return (
+    /\b(reprogram\w*|reagend\w*|cambi\w*|mov\w*|pospon\w*|aplaz\w*)\b/.test(normalized) ||
+    /\b(otro dia|otra fecha|nueva fecha|siguiente semana|proxima semana|proximo mes)\b/.test(normalized)
+  );
+}
+
+function hasCancelLanguage(text: string) {
+  const normalized = normalizeText(text);
+
+  return /\b(cancelar_cita|cancel\w*|no voy|no asistire|no asistire|no podre|no podre|no puedo asistir|no alcanzare|no alcanzare)\b/.test(
+    normalized
+  );
+}
+
 function detectIntent(text: string) {
   const normalized = normalizeText(text);
 
@@ -124,17 +141,11 @@ function detectIntent(text: string) {
     return "CONFIRM";
   }
 
-  if (
-    /\b(reprogramar_cita|cambiar_fecha|reprogram\w*|reagend\w*|cambiar|mover|posponer|pospongo|aplazar)\b/.test(
-      normalized
-    )
-  ) {
+  if (hasReprogramLanguage(text)) {
     return "REPROGRAM_REQUEST";
   }
 
-  if (/\b(cancelar_cita|cancel\w*|no voy|no asistire|no asistiré|no podre|no podré|no puedo asistir)\b/.test(
-    normalized
-  )) {
+  if (hasCancelLanguage(text)) {
     return "CANCEL";
   }
 
@@ -1793,7 +1804,7 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
     return reprogramAppointment(appointment, correctedWeekdayDate);
   }
 
-  if (!effectiveHasResponseContext || effectiveIntent === "UNKNOWN") {
+  if (appointment.status !== "CANCELLED" && (!effectiveHasResponseContext || effectiveIntent === "UNKNOWN")) {
     await createClientMessageNotification(appointment.client, input.message);
 
     return { ok: true, action: "CLIENT_MESSAGE_RECORDED", appointmentId: appointment.id };
