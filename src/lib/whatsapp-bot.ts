@@ -124,18 +124,18 @@ function detectIntent(text: string) {
     return "CONFIRM";
   }
 
-  if (/\b(cancelar_cita|cancel\w*|no voy|no asistire|no asistiré|no podre|no podré|no puedo asistir)\b/.test(
-    normalized
-  )) {
-    return "CANCEL";
-  }
-
   if (
-    /\b(reprogramar_cita|cambiar_fecha|reprogram\w*|reagend\w*|cambiar|mover|posponer|pospongo|aplazar|no puedo)\b/.test(
+    /\b(reprogramar_cita|cambiar_fecha|reprogram\w*|reagend\w*|cambiar|mover|posponer|pospongo|aplazar)\b/.test(
       normalized
     )
   ) {
     return "REPROGRAM_REQUEST";
+  }
+
+  if (/\b(cancelar_cita|cancel\w*|no voy|no asistire|no asistiré|no podre|no podré|no puedo asistir)\b/.test(
+    normalized
+  )) {
+    return "CANCEL";
   }
 
   if (/\b(si|ok|asisto|voy)\b/.test(normalized)) {
@@ -1712,6 +1712,22 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
   }
 
   if (appointment.status === "CANCELLED") {
+    if (requestedRange && asksAvailability) {
+      const reprogrammingAppointment = await prisma.appointment.update({
+        where: { id: appointment.id },
+        data: { status: "REPROGRAM_PENDING", statusChangedAt: new Date() },
+        include: { client: true }
+      });
+      await logAppointmentEvent({
+        appointmentId: reprogrammingAppointment.id,
+        type: "REPROGRAM_PENDING",
+        userId: reprogrammingAppointment.userId
+      });
+      await createAppointmentStatusNotification(reprogrammingAppointment, "REPROGRAM_PENDING");
+
+      return replyWithRangeAvailabilityQuestion(reprogrammingAppointment, requestedRange);
+    }
+
     if (proposedDate && asksAvailability) {
       const reprogrammingAppointment = await prisma.appointment.update({
         where: { id: appointment.id },
