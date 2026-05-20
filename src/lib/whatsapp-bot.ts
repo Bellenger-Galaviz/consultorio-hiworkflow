@@ -251,7 +251,7 @@ function buildInputDate(year: number, month: number, date: number) {
 function inferPeriod(text: string) {
   const normalized = normalizeText(text);
 
-  if (/\b(mananas?|temprano)\b/.test(normalized)) {
+  if (/\b(por la manana|en la manana|de manana|mananas|temprano)\b/.test(normalized)) {
     return "morning";
   }
 
@@ -309,6 +309,18 @@ function inferAvailabilityRange(message: string): AvailabilityRange | null {
       period,
       label: "el siguiente mes",
       asksForDay: true
+    };
+  }
+
+  if (/\b(pasado manana)\b/.test(normalized)) {
+    const rangeStart = addDaysToInputDate(today, 2);
+
+    return {
+      rangeStart,
+      rangeEnd: rangeStart,
+      period,
+      label: "pasado mañana",
+      asksForDay: false
     };
   }
 
@@ -396,6 +408,10 @@ function inferRequestedDay(message: string, preferredRange?: { rangeStart?: stri
   const normalized = normalizeText(message);
   const today = formatInputDate(new Date());
   const todayParts = getInputDateParts(today);
+
+  if (/\b(pasado manana)\b/.test(normalized)) {
+    return addDaysToInputDate(today, 2);
+  }
 
   if (/\b(manana)\b/.test(normalized)) {
     return addDaysToInputDate(today, 1);
@@ -1613,7 +1629,11 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
     }
   });
   const localRange = inferAvailabilityRange(input.message);
-  const requestedPeriod = inferPeriod(input.message) ?? input.agent?.period ?? undefined;
+  const normalizedIncomingMessage = normalizeText(input.message);
+  const localPeriod = inferPeriod(input.message);
+  const shouldIgnoreAgentPeriod =
+    /\bpasado manana\b/.test(normalizedIncomingMessage) && !localPeriod;
+  const requestedPeriod = localPeriod ?? (shouldIgnoreAgentPeriod ? undefined : input.agent?.period ?? undefined);
   const agentRange =
     input.agent?.rangeStart || input.agent?.rangeEnd
       ? {
@@ -1653,6 +1673,18 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
     rangeEnd: requestedRange?.rangeEnd ?? previousState?.rangeEnd
   });
   const explicitTime = hasExplicitTime(input.message);
+  const requestedTime = inferRequestedTime(input.message);
+  const proposedDateFromPreviousDayTime =
+    explicitTime &&
+    requestedTime &&
+    previousState?.rangeStart &&
+    previousState.rangeStart === previousState.rangeEnd
+      ? zonedDateTimeToUtc(previousState.rangeStart, requestedTime)
+      : null;
+  const validProposedDateFromPreviousDayTime =
+    proposedDateFromPreviousDayTime && proposedDateFromPreviousDayTime > new Date()
+      ? proposedDateFromPreviousDayTime
+      : null;
   const requestedDayWithoutTime =
     !explicitTime && getMentionedWeekday(input.message) !== null
       ? inferRequestedDay(input.message, {
@@ -1680,6 +1712,16 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
 
   if (appointment.status === "REPROGRAM_PENDING" && effectiveHasResponseContext && requestedDayWithoutTime) {
     return askForTimeOnRequestedDay(appointment, requestedDayWithoutTime, requestedPeriod ?? previousState?.period ?? undefined);
+  }
+
+  if (
+    appointment.status === "REPROGRAM_PENDING" &&
+    effectiveHasResponseContext &&
+    validProposedDateFromPreviousDayTime
+  ) {
+    return asksAvailability
+      ? replyWithExactAvailability(appointment, validProposedDateFromPreviousDayTime)
+      : reprogramAppointment(appointment, validProposedDateFromPreviousDayTime);
   }
 
   if (appointment.status === "REPROGRAM_PENDING" && effectiveHasResponseContext && proposedDate && asksAvailability) {

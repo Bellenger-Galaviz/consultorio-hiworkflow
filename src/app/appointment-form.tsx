@@ -34,6 +34,8 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
   const [date, setDate] = useState(today);
   const [duration, setDuration] = useState(60);
   const [time, setTime] = useState("");
+  const [clientQuery, setClientQuery] = useState("");
+  const [selectedClientId, setSelectedClientId] = useState("");
 
   const slots = useMemo(
     () =>
@@ -61,6 +63,17 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
       }),
     [appointments, date, duration]
   );
+  const filteredClients = useMemo(() => {
+    const normalizedQuery = normalizeClientSearch(clientQuery);
+
+    if (!normalizedQuery) {
+      return clients.slice(0, 8);
+    }
+
+    return clients
+      .filter((client) => normalizeClientSearch(client.fullName).includes(normalizedQuery))
+      .slice(0, 8);
+  }, [clients, clientQuery]);
 
   useEffect(() => {
     const selectedSlot = slots.find((slot) => slot.value === time);
@@ -75,15 +88,44 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
       <div className="md:col-span-2">
         <label className="grid gap-1">
           <span className="label">Cliente</span>
-          <select className="field" name="clientId" required>
-            <option value="">Selecciona un cliente</option>
-            {clients.map((client) => (
-              <option key={client.id} value={client.id}>
-                {client.fullName}
-              </option>
-            ))}
-          </select>
+          <input name="clientId" type="hidden" value={selectedClientId} />
+          <input
+            autoComplete="off"
+            className="field"
+            onChange={(event) => {
+              setClientQuery(event.target.value);
+              setSelectedClientId("");
+            }}
+            placeholder="Buscar cliente por nombre"
+            type="search"
+            value={clientQuery}
+          />
         </label>
+        <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-black/10">
+          {filteredClients.map((client) => {
+            const isSelected = client.id === selectedClientId;
+
+            return (
+              <button
+                className={`flex w-full items-center justify-between border-b border-black/10 px-3 py-2 text-left text-sm last:border-b-0 ${
+                  isSelected ? "bg-cyan/10 font-semibold text-cyan" : "hover:bg-cyan/5"
+                }`}
+                key={client.id}
+                onClick={() => {
+                  setClientQuery(client.fullName);
+                  setSelectedClientId(client.id);
+                }}
+                type="button"
+              >
+                <span>{client.fullName}</span>
+                {isSelected ? <span>Seleccionado</span> : null}
+              </button>
+            );
+          })}
+          {filteredClients.length === 0 ? (
+            <div className="px-3 py-4 text-sm text-ink/60">No encontré clientes con ese nombre.</div>
+          ) : null}
+        </div>
       </div>
 
       <label className="grid gap-1">
@@ -148,12 +190,20 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
         <textarea className="field min-h-16 resize-y" name="notes" />
       </label>
 
-      <button className="primary-button md:col-span-2" disabled={clients.length === 0} type="submit">
+      <button className="primary-button md:col-span-2" disabled={clients.length === 0 || !selectedClientId} type="submit">
         <Plus size={16} />
         Agendar cita
       </button>
     </form>
   );
+}
+
+function normalizeClientSearch(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
 }
 
 function formatSlotRange(time: string, duration: number) {
