@@ -1,7 +1,7 @@
 "use client";
 
-import { Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatInputDate, formatInputTime, zonedDateTimeToUtc } from "@/lib/timezone";
 import type { createAppointment } from "./actions";
 
@@ -36,6 +36,9 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
   const [time, setTime] = useState("");
   const [clientQuery, setClientQuery] = useState("");
   const [selectedClientId, setSelectedClientId] = useState("");
+  const [isClientPickerOpen, setIsClientPickerOpen] = useState(false);
+  const clientPickerRef = useRef<HTMLDivElement>(null);
+  const clientSearchRef = useRef<HTMLInputElement>(null);
 
   const slots = useMemo(
     () =>
@@ -67,12 +70,10 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
     const normalizedQuery = normalizeClientSearch(clientQuery);
 
     if (!normalizedQuery) {
-      return clients.slice(0, 8);
+      return clients;
     }
 
-    return clients
-      .filter((client) => normalizeClientSearch(client.fullName).includes(normalizedQuery))
-      .slice(0, 8);
+    return clients.filter((client) => normalizeClientSearch(client.fullName).includes(normalizedQuery));
   }, [clients, clientQuery]);
 
   useEffect(() => {
@@ -83,49 +84,83 @@ export function AppointmentForm({ action, appointments, clients }: AppointmentFo
     }
   }, [slots, time]);
 
+  useEffect(() => {
+    function closePickerOnOutsideClick(event: MouseEvent) {
+      if (clientPickerRef.current?.contains(event.target as Node)) {
+        return;
+      }
+
+      setIsClientPickerOpen(false);
+    }
+
+    document.addEventListener("mousedown", closePickerOnOutsideClick);
+
+    return () => document.removeEventListener("mousedown", closePickerOnOutsideClick);
+  }, []);
+
   return (
     <form action={action} className="grid gap-3 md:grid-cols-2">
       <div className="md:col-span-2">
         <label className="grid gap-1">
           <span className="label">Cliente</span>
-          <input name="clientId" type="hidden" value={selectedClientId} />
-          <input
-            autoComplete="off"
-            className="field"
-            onChange={(event) => {
-              setClientQuery(event.target.value);
-              setSelectedClientId("");
-            }}
-            placeholder="Buscar cliente por nombre"
-            type="search"
-            value={clientQuery}
-          />
-        </label>
-        <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-black/10">
-          {filteredClients.map((client) => {
-            const isSelected = client.id === selectedClientId;
+          <div className="relative" ref={clientPickerRef}>
+            <input name="clientId" type="hidden" value={selectedClientId} />
+            <input
+              autoComplete="off"
+              className="field pr-11"
+              onChange={(event) => {
+                setClientQuery(event.target.value);
+                setSelectedClientId("");
+                setIsClientPickerOpen(true);
+              }}
+              onFocus={() => setIsClientPickerOpen(true)}
+              placeholder="Selecciona o busca un cliente"
+              ref={clientSearchRef}
+              role="combobox"
+              type="search"
+              value={clientQuery}
+            />
+            <button
+              aria-label="Mostrar clientes"
+              className="absolute right-2 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-md text-ink/65 hover:bg-cyan/10"
+              onClick={() => {
+                setIsClientPickerOpen((current) => !current);
+                clientSearchRef.current?.focus();
+              }}
+              type="button"
+            >
+              <ChevronDown size={18} />
+            </button>
+            {isClientPickerOpen ? (
+              <div className="absolute z-20 mt-2 max-h-56 w-full overflow-y-auto rounded-md border border-black/10 bg-white shadow-soft">
+                {filteredClients.map((client) => {
+                  const isSelected = client.id === selectedClientId;
 
-            return (
-              <button
-                className={`flex w-full items-center justify-between border-b border-black/10 px-3 py-2 text-left text-sm last:border-b-0 ${
-                  isSelected ? "bg-cyan/10 font-semibold text-cyan" : "hover:bg-cyan/5"
-                }`}
-                key={client.id}
-                onClick={() => {
-                  setClientQuery(client.fullName);
-                  setSelectedClientId(client.id);
-                }}
-                type="button"
-              >
-                <span>{client.fullName}</span>
-                {isSelected ? <span>Seleccionado</span> : null}
-              </button>
-            );
-          })}
-          {filteredClients.length === 0 ? (
-            <div className="px-3 py-4 text-sm text-ink/60">No encontré clientes con ese nombre.</div>
-          ) : null}
-        </div>
+                  return (
+                    <button
+                      className={`flex w-full items-center justify-between border-b border-black/10 px-3 py-2 text-left text-sm last:border-b-0 ${
+                        isSelected ? "bg-cyan/10 font-semibold text-cyan" : "hover:bg-cyan/5"
+                      }`}
+                      key={client.id}
+                      onClick={() => {
+                        setClientQuery(client.fullName);
+                        setSelectedClientId(client.id);
+                        setIsClientPickerOpen(false);
+                      }}
+                      type="button"
+                    >
+                      <span>{client.fullName}</span>
+                      {isSelected ? <span>Seleccionado</span> : null}
+                    </button>
+                  );
+                })}
+                {filteredClients.length === 0 ? (
+                  <div className="px-3 py-4 text-sm text-ink/60">No encontré clientes con ese nombre.</div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </label>
       </div>
 
       <label className="grid gap-1">
