@@ -4,6 +4,7 @@ import {
   LogOut,
   MessageCircle,
   Plus,
+  StickyNote,
   Upload,
   UserPlus,
   Users
@@ -95,7 +96,23 @@ export default async function Home({
         NOT: { status: "REPROGRAMMED" }
       },
       include: {
-        client: true,
+        client: {
+          include: {
+            appointments: {
+              where: {
+                userId: user.id,
+                notes: { not: null }
+              },
+              orderBy: { startsAt: "desc" },
+              select: {
+                id: true,
+                notes: true,
+                startsAt: true,
+                title: true
+              }
+            }
+          }
+        },
         events: { orderBy: { createdAt: "asc" } }
       },
       orderBy: { startsAt: "asc" }
@@ -461,6 +478,10 @@ export default async function Home({
                           <StatusButton id={appointment.id} returnTo={returnTo} status="MISSED" label="No asistió" />
                           <StatusButton id={appointment.id} returnTo={returnTo} status="CANCELLED" label="Canceló" />
                           <StatusButton id={appointment.id} returnTo={returnTo} status="REPROGRAM_PENDING" label="Pospuso" />
+                          <ClientNotesHistory
+                            appointmentNotes={appointment.client.appointments}
+                            clientNotes={appointment.client.notes}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -950,6 +971,59 @@ function DateCell({
       <span className="font-semibold">Nueva: {formatDateTime(startsAt)}</span>
       <span className="text-xs text-ink/55">Anterior: {formatDateTime(previousStartsAt)}</span>
     </div>
+  );
+}
+
+function ClientNotesHistory({
+  appointmentNotes,
+  clientNotes
+}: {
+  appointmentNotes: Array<{
+    id: string;
+    notes: string | null;
+    startsAt: Date;
+    title: string;
+  }>;
+  clientNotes?: string | null;
+}) {
+  const notes = [
+    clientNotes?.trim()
+      ? {
+          id: "client-registration",
+          label: "Al registrarlo",
+          text: clientNotes.trim()
+        }
+      : null,
+    ...appointmentNotes
+      .filter((appointment) => appointment.notes?.trim())
+      .map((appointment) => ({
+        id: appointment.id,
+        label: `Cita del ${formatDateTime(appointment.startsAt)} · ${appointment.title}`,
+        text: appointment.notes!.trim()
+      }))
+  ].filter((note): note is { id: string; label: string; text: string } => Boolean(note));
+
+  return (
+    <details className="relative">
+      <summary className="secondary-button cursor-pointer list-none">
+        <StickyNote size={16} />
+        Ver notas
+      </summary>
+      <div className="absolute right-0 z-20 mt-2 max-h-80 w-96 max-w-[75vw] overflow-y-auto rounded-md border border-black/10 bg-white p-3 shadow-soft">
+        {notes.length > 0 ? (
+          <div className="grid gap-3">
+            {notes.map((note) => (
+              <div className="rounded-md border border-black/10 p-3" key={note.id}>
+                <p className="text-xs font-semibold uppercase tracking-wide text-leaf">{note.label}</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink/70">{note.text}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-ink/60">Este paciente todavía no tiene notas registradas.</p>
+        )}
+      </div>
+    </details>
   );
 }
 
