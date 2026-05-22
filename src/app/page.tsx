@@ -27,16 +27,14 @@ import {
   updateAppointmentStatus
 } from "./actions";
 import { AppointmentForm } from "./appointment-form";
-import { AutoSubmitDateInput } from "./auto-submit-date-input";
 import { logoutDoctor } from "./auth-actions";
-import { ClientFilesHistory } from "./client-files-history";
 import { ClientManager } from "./client-manager";
-import { ClientNotesHistory } from "./client-notes-history";
 import { ConfirmSubmitButton } from "./confirm-submit-button";
 import { CrmPanel, type CrmMessage } from "./crm-panel";
 import { MetricsPanel } from "./metrics-panel";
 import { NotificationsMenu } from "./notifications-menu";
 import { ThemeToggle } from "./theme-toggle";
+import { UpcomingAppointmentsPanel, type UpcomingAppointment } from "./upcoming-appointments-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -70,7 +68,6 @@ export default async function Home({
   const selectedDay = getSelectedDay(params.day);
   const chatSearch = normalizeSearch(params.chatSearch ?? "");
   const weekDays = getWeekDays(selectedDay);
-  const { startOfDay, endOfDay } = getClinicDayBounds(selectedDay);
   const { startOfDay: startOfWeek } = getClinicDayBounds(weekDays[0]);
   const { endOfDay: endOfWeek } = getClinicDayBounds(weekDays[6]);
   const todayStart = getClinicDayBounds(formatInputDate(new Date())).startOfDay;
@@ -91,10 +88,6 @@ export default async function Home({
     prisma.appointment.findMany({
       where: {
         userId: user.id,
-        startsAt: {
-          gte: startOfDay,
-          lt: endOfDay
-        },
         NOT: { status: "REPROGRAMMED" }
       },
       include: {
@@ -391,6 +384,40 @@ export default async function Home({
     chatSearch: params.chatSearch,
     day: params.day ? selectedDay : undefined
   });
+  const returnToBase = buildHomeHref({
+    chatClientId: selectedChatClientId ?? undefined,
+    chatUnknownId: selectedChatUnknownId ?? undefined,
+    chatSearch: params.chatSearch
+  });
+  const upcomingAppointments: UpcomingAppointment[] = appointments.map((appointment) => ({
+    clientAppointmentNumber: appointment.clientAppointmentNumber,
+    clientFiles: appointment.client.files.map((file) => ({
+      createdAt: file.createdAt.toISOString(),
+      id: file.id,
+      mimeType: file.mimeType,
+      name: file.originalName,
+      size: file.size,
+      url: `/api/client-files/${file.id}`
+    })),
+    clientName: appointment.client.fullName,
+    createdAt: appointment.createdAt.toISOString(),
+    events: appointment.events.map((event) => ({
+      createdAt: event.createdAt.toISOString(),
+      id: event.id,
+      label: event.label,
+      type: event.type
+    })),
+    id: appointment.id,
+    notes: buildClientNotesHistory({
+      appointmentNotes: appointment.client.appointments,
+      clientNotes: appointment.client.notes
+    }),
+    previousStartsAt: appointment.previousStartsAt?.toISOString() ?? null,
+    startsAt: appointment.startsAt.toISOString(),
+    status: appointment.status,
+    statusChangedAt: appointment.statusChangedAt?.toISOString() ?? null,
+    title: appointment.title
+  }));
 
   return (
     <main className="min-h-screen">
@@ -455,118 +482,13 @@ export default async function Home({
 
         <section>
           <Panel title="Próximas citas" icon={<CalendarClock size={18} />}>
-            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-              <p className="text-sm font-semibold text-ink/60">
-                Mostrando citas para {formatDate(startOfDay)}
-              </p>
-              <div className="flex flex-wrap items-end gap-2">
-                <form className="flex flex-wrap items-end gap-2" method="get">
-                  {selectedChatClientId ? (
-                    <input name="chatClientId" type="hidden" value={selectedChatClientId} />
-                  ) : null}
-                  {selectedChatUnknownId ? (
-                    <input name="chatUnknownId" type="hidden" value={selectedChatUnknownId} />
-                  ) : null}
-                  {params.chatSearch ? (
-                    <input name="chatSearch" type="hidden" value={params.chatSearch} />
-                  ) : null}
-                  <label className="grid gap-1">
-                    <span className="label">Día</span>
-                    <AutoSubmitDateInput className="field w-44" defaultValue={selectedDay} name="day" />
-                  </label>
-                </form>
-                <Link
-                  className="secondary-button"
-                  href={buildHomeHref({
-                    chatClientId: selectedChatClientId ?? undefined,
-                    chatUnknownId: selectedChatUnknownId ?? undefined,
-                    chatSearch: params.chatSearch
-                  })}
-                >
-                  Hoy
-                </Link>
-              </div>
-            </div>
-            <div className="overflow-x-auto rounded-md border border-black/10">
-              <table className="w-full min-w-[920px] text-left text-sm">
-                <thead className="bg-ink text-white">
-                  <tr>
-                    <th className="px-3 py-2">Cliente</th>
-                    <th className="px-3 py-2">Cita</th>
-                    <th className="px-3 py-2">Fecha</th>
-                    <th className="px-3 py-2">Estado</th>
-                    <th className="px-3 py-2">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-black/10 bg-white">
-                  {appointments.map((appointment) => (
-                    <tr key={appointment.id}>
-                      <td className="px-3 py-3 font-medium">{appointment.client.fullName}</td>
-                      <td className="px-3 py-3">
-                        <AppointmentTitle
-                          number={appointment.clientAppointmentNumber}
-                          title={appointment.title}
-                        />
-                      </td>
-                      <td className="px-3 py-3">
-                        <DateCell
-                          previousStartsAt={appointment.previousStartsAt}
-                          startsAt={appointment.startsAt}
-                        />
-                      </td>
-                      <td className="px-3 py-3">
-                        <StatusCell
-                          createdAt={appointment.createdAt}
-                          events={appointment.events}
-                          previousStartsAt={appointment.previousStartsAt}
-                          statusChangedAt={appointment.statusChangedAt}
-                          status={appointment.status}
-                        />
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex flex-wrap gap-2">
-                          <form action={sendAppointmentReminder}>
-                            <input name="appointmentId" type="hidden" value={appointment.id} />
-                            <input name="returnTo" type="hidden" value={returnTo} />
-                            <button className="icon-button" title="Enviar WhatsApp ahora" type="submit">
-                              <MessageCircle size={16} />
-                            </button>
-                          </form>
-                          <StatusButton id={appointment.id} returnTo={returnTo} status="CONFIRMED" label="Confirmar" />
-                          <StatusButton id={appointment.id} returnTo={returnTo} status="ATTENDED" label="Asistió" />
-                          <StatusButton id={appointment.id} returnTo={returnTo} status="MISSED" label="No asistió" />
-                          <StatusButton id={appointment.id} returnTo={returnTo} status="CANCELLED" label="Canceló" />
-                          <StatusButton id={appointment.id} returnTo={returnTo} status="REPROGRAM_PENDING" label="Pospuso" />
-                          <ClientNotesHistory
-                            notes={buildClientNotesHistory({
-                              appointmentNotes: appointment.client.appointments,
-                              clientNotes: appointment.client.notes
-                            })}
-                          />
-                          <ClientFilesHistory
-                            files={appointment.client.files.map((file) => ({
-                              createdAt: file.createdAt.toISOString(),
-                              id: file.id,
-                              mimeType: file.mimeType,
-                              name: file.originalName,
-                              size: file.size,
-                              url: `/api/client-files/${file.id}`
-                            }))}
-                          />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {appointments.length === 0 ? (
-                    <tr>
-                      <td className="px-3 py-8 text-center text-ink/60" colSpan={5}>
-                        Sin citas para este día.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
+            <UpcomingAppointmentsPanel
+              appointments={upcomingAppointments}
+              initialDay={selectedDay}
+              returnToBase={returnToBase}
+              sendReminderAction={sendAppointmentReminder}
+              updateStatusAction={updateAppointmentStatus}
+            />
           </Panel>
         </section>
 
