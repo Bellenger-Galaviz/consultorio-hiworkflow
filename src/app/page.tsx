@@ -4,7 +4,6 @@ import {
   LogOut,
   MessageCircle,
   Plus,
-  StickyNote,
   Upload,
   UserPlus,
   Users
@@ -30,6 +29,7 @@ import {
 import { AppointmentForm } from "./appointment-form";
 import { logoutDoctor } from "./auth-actions";
 import { ClientManager } from "./client-manager";
+import { ClientNotesHistory } from "./client-notes-history";
 import { ConfirmSubmitButton } from "./confirm-submit-button";
 import { CrmPanel } from "./crm-panel";
 import { MetricsPanel } from "./metrics-panel";
@@ -479,8 +479,10 @@ export default async function Home({
                           <StatusButton id={appointment.id} returnTo={returnTo} status="CANCELLED" label="Canceló" />
                           <StatusButton id={appointment.id} returnTo={returnTo} status="REPROGRAM_PENDING" label="Pospuso" />
                           <ClientNotesHistory
-                            appointmentNotes={appointment.client.appointments}
-                            clientNotes={appointment.client.notes}
+                            notes={buildClientNotesHistory({
+                              appointmentNotes: appointment.client.appointments,
+                              clientNotes: appointment.client.notes
+                            })}
                           />
                         </div>
                       </td>
@@ -974,7 +976,7 @@ function DateCell({
   );
 }
 
-function ClientNotesHistory({
+function buildClientNotesHistory({
   appointmentNotes,
   clientNotes
 }: {
@@ -986,7 +988,7 @@ function ClientNotesHistory({
   }>;
   clientNotes?: string | null;
 }) {
-  const notes = [
+  return [
     clientNotes?.trim()
       ? {
           id: "client-registration",
@@ -998,33 +1000,10 @@ function ClientNotesHistory({
       .filter((appointment) => appointment.notes?.trim())
       .map((appointment) => ({
         id: appointment.id,
-        label: `Cita del ${formatDateTime(appointment.startsAt)} · ${appointment.title}`,
+        label: `Cita del ${formatDateTime(appointment.startsAt)} - ${appointment.title}`,
         text: appointment.notes!.trim()
       }))
   ].filter((note): note is { id: string; label: string; text: string } => Boolean(note));
-
-  return (
-    <details className="relative">
-      <summary className="secondary-button cursor-pointer list-none">
-        <StickyNote size={16} />
-        Ver notas
-      </summary>
-      <div className="absolute right-0 z-20 mt-2 max-h-80 w-96 max-w-[75vw] overflow-y-auto rounded-md border border-black/10 bg-white p-3 shadow-soft">
-        {notes.length > 0 ? (
-          <div className="grid gap-3">
-            {notes.map((note) => (
-              <div className="rounded-md border border-black/10 p-3" key={note.id}>
-                <p className="text-xs font-semibold uppercase tracking-wide text-leaf">{note.label}</p>
-                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink/70">{note.text}</p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-ink/60">Este paciente todavía no tiene notas registradas.</p>
-        )}
-      </div>
-    </details>
-  );
 }
 
 function StatusCell({
