@@ -52,6 +52,18 @@ export async function createClientMessageNotification(client: Client, message: s
   });
 }
 
+export async function createClientFileNotification(client: Client, fileName: string) {
+  await prisma.notification.create({
+    data: {
+      userId: client.userId,
+      type: "WHATSAPP_CLIENT_FILE",
+      title: "Archivo recibido",
+      body: `${client.fullName} enviÃ³ el archivo "${truncateMessage(fileName)}".`,
+      target: `/?chatClientId=${client.id}#crm-whatsapp`
+    }
+  });
+}
+
 export async function createUnknownContactNotification(
   contact: UnknownContact,
   message: string

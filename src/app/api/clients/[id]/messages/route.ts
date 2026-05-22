@@ -19,7 +19,7 @@ export async function GET(
     return NextResponse.json({ error: "Cliente no encontrado." }, { status: 404 });
   }
 
-  const [chatMessages, reminderMessages] = await Promise.all([
+  const [chatMessages, reminderMessages, clientFiles] = await Promise.all([
     prisma.chatMessage.findMany({
       where: {
         userId: user.id,
@@ -36,6 +36,14 @@ export async function GET(
       },
       include: { appointment: true },
       orderBy: { sentAt: "asc" },
+      take: 80
+    }),
+    prisma.clientFile.findMany({
+      where: {
+        userId: user.id,
+        clientId: id
+      },
+      orderBy: { createdAt: "asc" },
       take: 80
     })
   ]);
@@ -58,7 +66,22 @@ export async function GET(
         direction: "OUTBOUND",
         id: `reminder-${message.id}`,
         message: message.message
-      }))
+      })),
+    ...clientFiles.map((file) => ({
+      appointmentTitle: null,
+      createdAt: file.createdAt.toISOString(),
+      direction: file.source === "WHATSAPP" ? "INBOUND" : "OUTBOUND",
+      file: {
+        id: file.id,
+        mimeType: file.mimeType,
+        name: file.originalName,
+        savedToRecord: file.status === "SAVED",
+        size: file.size,
+        url: `/api/client-files/${file.id}`
+      },
+      id: `file-${file.id}`,
+      message: file.caption || `Archivo: ${file.originalName}`
+    }))
   ].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
 
   return NextResponse.json({ messages });

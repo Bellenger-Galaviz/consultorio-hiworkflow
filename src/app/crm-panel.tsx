@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { CheckCircle2, ExternalLink, FileText, Paperclip } from "lucide-react";
 import { APP_TIME_ZONE } from "@/lib/timezone";
 
 export type CrmThread = {
@@ -18,6 +19,15 @@ export type CrmMessage = {
   appointmentTitle: string | null;
   createdAt: string;
   direction: string;
+  file?: {
+    id: string;
+    mimeType: string;
+    name: string;
+    savedToRecord: boolean;
+    size: number;
+    source: string;
+    url: string;
+  };
   id: string;
   message: string;
 };
@@ -35,6 +45,7 @@ export function CrmPanel({
 }: CrmPanelProps) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [, startTransition] = useTransition();
   const [search, setSearch] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState(initialSelectedThreadId);
@@ -42,6 +53,7 @@ export function CrmPanel({
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
 
   const filteredThreads = useMemo(() => {
@@ -71,12 +83,12 @@ export function CrmPanel({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error ?? "No se pudo cargar la conversación.");
+        throw new Error(data.error ?? "No se pudo cargar la conversacion.");
       }
 
       setMessages(data.messages);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "No se pudo cargar la conversación.");
+      setStatus(error instanceof Error ? error.message : "No se pudo cargar la conversacion.");
     } finally {
       setIsLoadingMessages(false);
     }
@@ -115,6 +127,92 @@ export function CrmPanel({
     }
   }
 
+  async function uploadFile() {
+    const selectedFile = fileInputRef.current?.files?.[0];
+
+    if (!selectedClient || !selectedFile || isUploadingFile) {
+      return;
+    }
+
+    const formData = new FormData();
+    formData.set("file", selectedFile);
+    setIsUploadingFile(true);
+    setStatus(null);
+
+    try {
+      const response = await fetch(`/api/clients/${selectedClient.id}/files`, {
+        body: formData,
+        method: "POST"
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudo guardar el archivo.");
+      }
+
+      setMessages((current) => [
+        ...current,
+        {
+          appointmentTitle: null,
+          createdAt: data.file.createdAt,
+          direction: "OUTBOUND",
+          file: {
+            id: data.file.id,
+            mimeType: data.file.mimeType,
+            name: data.file.name,
+            savedToRecord: data.file.savedToRecord,
+            size: data.file.size,
+            source: "MANUAL",
+            url: data.file.url
+          },
+          id: `file-${data.file.id}`,
+          message: `Archivo: ${data.file.name}`
+        }
+      ]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      startTransition(() => router.refresh());
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "No se pudo guardar el archivo.");
+    } finally {
+      setIsUploadingFile(false);
+    }
+  }
+
+  async function saveFileToRecord(fileId: string) {
+    setStatus(null);
+
+    try {
+      const response = await fetch(`/api/client-files/${fileId}/save`, { method: "POST" });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudo guardar en el expediente.");
+      }
+
+      setMessages((current) =>
+        current.map((message) => {
+          if (!message.file || message.file.id !== data.file.id) {
+            return message;
+          }
+
+          return {
+            ...message,
+            file: {
+              ...message.file,
+              savedToRecord: data.file.savedToRecord
+            }
+          };
+        })
+      );
+      setStatus("Archivo guardado en el expediente del paciente.");
+      startTransition(() => router.refresh());
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "No se pudo guardar en el expediente.");
+    }
+  }
+
   function submitWithEnter(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
       return;
@@ -127,7 +225,7 @@ export function CrmPanel({
   if (threads.length === 0) {
     return (
       <div className="rounded-md border border-black/10 px-4 py-8 text-center text-sm text-ink/60">
-        Aún no hay clientes registrados.
+        Aun no hay clientes registrados.
       </div>
     );
   }
@@ -179,7 +277,7 @@ export function CrmPanel({
           })}
           {filteredThreads.length === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-ink/60">
-              No encontré clientes con ese nombre.
+              No encontre clientes con ese nombre.
             </div>
           ) : null}
         </div>
@@ -193,10 +291,10 @@ export function CrmPanel({
 
         <div className="grid max-h-[420px] gap-3 overflow-y-auto bg-paper p-4">
           {isLoadingMessages ? (
-            <p className="text-center text-sm text-ink/55">Cargando conversación...</p>
+            <p className="text-center text-sm text-ink/55">Cargando conversacion...</p>
           ) : null}
           {!isLoadingMessages && messages.length === 0 ? (
-            <p className="text-center text-sm text-ink/55">Sin mensajes todavía.</p>
+            <p className="text-center text-sm text-ink/55">Sin mensajes todavia.</p>
           ) : null}
           {messages.map((message) => {
             const isOutbound = message.direction === "OUTBOUND";
@@ -211,7 +309,54 @@ export function CrmPanel({
                     isOutbound ? "bg-leaf text-white" : "bg-white text-ink"
                   }`}
                 >
-                  <p>{message.message}</p>
+                  {message.file ? (
+                    <div className="grid gap-2">
+                      <div className="flex items-start gap-2">
+                        <FileText className="mt-0.5 shrink-0" size={18} />
+                        <div className="min-w-0">
+                          <p className="break-words font-semibold">{message.file.name}</p>
+                          <p className={isOutbound ? "text-white/75" : "text-ink/55"}>
+                            {formatFileSize(message.file.size)} · {message.file.mimeType}
+                          </p>
+                        </div>
+                      </div>
+                      {message.message && !message.message.startsWith("Archivo:") ? (
+                        <p>{message.message}</p>
+                      ) : null}
+                      <div className="flex flex-wrap gap-2">
+                        <a
+                          className={isOutbound ? "message-link-light" : "message-link"}
+                          href={message.file.url}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          <ExternalLink size={14} />
+                          Abrir
+                        </a>
+                        {message.file.savedToRecord ? (
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold ${
+                              isOutbound ? "bg-white/15 text-white" : "bg-mint text-leaf"
+                            }`}
+                          >
+                            <CheckCircle2 size={14} />
+                            En expediente
+                          </span>
+                        ) : (
+                          <button
+                            className={isOutbound ? "message-link-light" : "message-link"}
+                            onClick={() => saveFileToRecord(message.file!.id)}
+                            type="button"
+                          >
+                            <CheckCircle2 size={14} />
+                            Guardar en expediente
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p>{message.message}</p>
+                  )}
                   <p className={`mt-1 text-xs ${isOutbound ? "text-white/70" : "text-ink/45"}`}>
                     {message.appointmentTitle ? `${message.appointmentTitle} · ` : ""}
                     {formatDateTime(message.createdAt)}
@@ -222,9 +367,10 @@ export function CrmPanel({
           })}
         </div>
 
-        <form className="grid gap-2 border-t border-black/10 p-3" onSubmit={sendMessage} ref={formRef}>
+        <div className="grid gap-2 border-t border-black/10 p-3">
           {status ? <p className="text-sm font-semibold text-coral">{status}</p> : null}
           {isSending ? <p className="text-sm font-semibold text-leaf">Enviando...</p> : null}
+          {isUploadingFile ? <p className="text-sm font-semibold text-leaf">Guardando archivo...</p> : null}
           {selectedThread?.kind === "unknown" ? (
             <a
               className="secondary-button w-fit"
@@ -233,27 +379,46 @@ export function CrmPanel({
               Agregar cliente
             </a>
           ) : null}
-          <label className="sr-only" htmlFor="crm-message">
-            Mensaje
-          </label>
-          <textarea
-            className="field min-h-20 resize-y"
-            disabled={!selectedClient || isSending}
-            id="crm-message"
-            maxLength={1000}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={submitWithEnter}
-            placeholder={
-              selectedThread?.kind === "unknown"
-                ? "Agrega este contacto para responder"
-                : selectedClient
-                  ? `Escribe a ${selectedClient.fullName}`
-                  : "Selecciona un cliente"
-            }
-            required={Boolean(selectedClient)}
-            value={draft}
-          />
-        </form>
+          {selectedClient ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="secondary-button cursor-pointer" htmlFor="crm-file">
+                <Paperclip size={16} />
+                Adjuntar archivo
+              </label>
+              <input
+                className="sr-only"
+                disabled={isUploadingFile}
+                id="crm-file"
+                name="file"
+                onChange={uploadFile}
+                ref={fileInputRef}
+                type="file"
+              />
+            </div>
+          ) : null}
+          <form className="grid gap-2" onSubmit={sendMessage} ref={formRef}>
+            <label className="sr-only" htmlFor="crm-message">
+              Mensaje
+            </label>
+            <textarea
+              className="field min-h-20 resize-y"
+              disabled={!selectedClient || isSending}
+              id="crm-message"
+              maxLength={1000}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={submitWithEnter}
+              placeholder={
+                selectedThread?.kind === "unknown"
+                  ? "Agrega este contacto para responder"
+                  : selectedClient
+                    ? `Escribe a ${selectedClient.fullName}`
+                    : "Selecciona un cliente"
+              }
+              required={Boolean(selectedClient)}
+              value={draft}
+            />
+          </form>
+        </div>
       </div>
     </div>
   );
@@ -277,4 +442,16 @@ function formatDateTime(value: string) {
     timeZone: APP_TIME_ZONE,
     year: "numeric"
   }).format(new Date(value));
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }

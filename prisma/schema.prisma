@@ -21,6 +21,7 @@ model Client {
   attendances  Attendance[]
   reminders    ReminderLog[]
   chatMessages ChatMessage[]
+  files        ClientFile[]
   whatsappAgentStates WhatsappAgentState[]
   waitlistEntries WaitlistEntry[]
 
@@ -206,6 +207,7 @@ model User {
   updatedAt    DateTime      @updatedAt
   sessions     Session[]
   clients      Client[]
+  clientFiles  ClientFile[]
   appointments Appointment[]
   attendances  Attendance[]
   reminders    ReminderLog[]
@@ -217,6 +219,30 @@ model User {
   notifications Notification[]
   unknownContacts UnknownContact[]
   unknownContactMessages UnknownContactMessage[]
+}
+
+model ClientFile {
+  id           String    @id @default(cuid())
+  userId       String
+  clientId     String
+  originalName String
+  storedName   String
+  mimeType     String
+  size         Int
+  storagePath  String
+  source       String    @default("MANUAL")
+  status       String    @default("SAVED")
+  caption      String?
+  savedAt      DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client       Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([clientId])
+  @@index([createdAt])
+  @@index([status])
 }
 
 model Session {

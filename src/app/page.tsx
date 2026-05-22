@@ -31,7 +31,7 @@ import { logoutDoctor } from "./auth-actions";
 import { ClientManager } from "./client-manager";
 import { ClientNotesHistory } from "./client-notes-history";
 import { ConfirmSubmitButton } from "./confirm-submit-button";
-import { CrmPanel } from "./crm-panel";
+import { CrmPanel, type CrmMessage } from "./crm-panel";
 import { MetricsPanel } from "./metrics-panel";
 import { NotificationsMenu } from "./notifications-menu";
 import { ThemeToggle } from "./theme-toggle";
@@ -129,8 +129,12 @@ export default async function Home({
     prisma.client.findMany({
       where: { userId: user.id },
       include: {
-        _count: { select: { chatMessages: true, reminders: true } },
+        _count: { select: { chatMessages: true, files: true, reminders: true } },
         chatMessages: {
+          orderBy: { createdAt: "desc" },
+          take: 1
+        },
+        files: {
           orderBy: { createdAt: "desc" },
           take: 1
         },
@@ -206,7 +210,7 @@ export default async function Home({
     const lastMessage = getThreadLastMessage(client);
 
     return {
-      count: client._count.chatMessages + client._count.reminders,
+      count: client._count.chatMessages + client._count.reminders + client._count.files,
       fullName: client.fullName,
       id: client.id,
       kind: "client" as const,
@@ -255,7 +259,7 @@ export default async function Home({
     null;
   const selectedChatClientId = selectedCrmThread?.kind === "client" ? selectedCrmThread.id : null;
   const selectedChatUnknownId = selectedCrmThread?.kind === "unknown" ? selectedCrmThread.id : null;
-  const [chatMessages, reminderMessages, unknownMessages] = selectedChatClientId
+  const [chatMessages, reminderMessages, clientFiles, unknownMessages] = selectedChatClientId
     ? await Promise.all([
         prisma.chatMessage.findMany({
           where: {
@@ -275,10 +279,19 @@ export default async function Home({
           orderBy: { sentAt: "asc" },
           take: 80
         }),
+        prisma.clientFile.findMany({
+          where: {
+            userId: user.id,
+            clientId: selectedChatClientId
+          },
+          orderBy: { createdAt: "asc" },
+          take: 80
+        }),
         []
       ])
     : selectedChatUnknownId
       ? await Promise.all([
+          [],
           [],
           [],
           prisma.unknownContactMessage.findMany({
@@ -290,13 +303,20 @@ export default async function Home({
             take: 80
           })
         ])
-      : [[], [], []];
+      : [[], [], [], []];
   const chatMessageKeys = new Set(
     chatMessages.map((message) => `${message.appointmentId ?? ""}:${message.message}`)
   );
   const crmMessages = selectedChatClientId
     ? [
-        ...chatMessages,
+        ...chatMessages.map((message) => ({
+          appointment: message.appointment,
+          createdAt: message.createdAt,
+          direction: message.direction,
+          id: message.id,
+          intent: message.intent,
+          message: message.message
+        })),
         ...reminderMessages
           .filter((message) => !chatMessageKeys.has(`${message.appointmentId ?? ""}:${message.message}`))
           .map((message) => ({
@@ -306,6 +326,23 @@ export default async function Home({
             id: `reminder-${message.id}`,
             intent: message.type,
             message: message.message
+          })),
+        ...clientFiles.map((file) => ({
+          appointment: null,
+          createdAt: file.createdAt,
+          direction: file.source === "WHATSAPP" ? "INBOUND" : "OUTBOUND",
+          file: {
+            id: file.id,
+            mimeType: file.mimeType,
+            name: file.originalName,
+            savedToRecord: file.status === "SAVED",
+            size: file.size,
+            source: file.source,
+            url: `/api/client-files/${file.id}`
+          },
+          id: `file-${file.id}`,
+          intent: "CLIENT_FILE",
+          message: file.caption || `Archivo: ${file.originalName}`
           }))
       ].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
     : unknownMessages.map((message) => ({
@@ -316,13 +353,21 @@ export default async function Home({
         intent: message.intent,
         message: message.message
       }));
-  const initialCrmMessages = crmMessages.map((message) => ({
-    appointmentTitle: message.appointment?.title ?? null,
-    createdAt: message.createdAt.toISOString(),
-    direction: message.direction,
-    id: message.id,
-    message: message.message
-  }));
+  const initialCrmMessages: CrmMessage[] = crmMessages.map((message) => {
+    const file =
+      "file" in message && message.file
+        ? (message.file as CrmMessage["file"])
+        : undefined;
+
+    return {
+      appointmentTitle: message.appointment?.title ?? null,
+      createdAt: message.createdAt.toISOString(),
+      direction: message.direction,
+      file,
+      id: message.id,
+      message: message.message
+    };
+  });
   const returnTo = buildHomeHref({
     chatClientId: selectedChatClientId ?? undefined,
     chatUnknownId: selectedChatUnknownId ?? undefined,
@@ -1116,11 +1161,15 @@ type ChatThread = {
   id: string;
   fullName: string;
   phone: string;
-  _count: { chatMessages: number; reminders: number };
+  _count: { chatMessages: number; files: number; reminders: number };
   chatMessages: Array<{
     createdAt: Date;
     direction: string;
     message: string;
+  }>;
+  files: Array<{
+    createdAt: Date;
+    originalName: string;
   }>;
   reminders: Array<{
     message: string;
@@ -1145,16 +1194,15 @@ function getThreadLastMessage(thread: ChatThread) {
         message: thread.reminders[0].message
       }
     : null;
+  const file = thread.files[0]
+    ? {
+        createdAt: thread.files[0].createdAt,
+        message: `Archivo: ${thread.files[0].originalName}`
+      }
+    : null;
+  const messages = [chatMessage, reminder, file].filter((message) => message !== null);
 
-  if (!chatMessage) {
-    return reminder;
-  }
-
-  if (!reminder) {
-    return chatMessage;
-  }
-
-  return chatMessage.createdAt > reminder.createdAt ? chatMessage : reminder;
+  return messages.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? null;
 }
 
 function Field({
