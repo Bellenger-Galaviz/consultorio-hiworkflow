@@ -76,6 +76,8 @@ export async function GET(
         mimeType: file.mimeType,
         name: file.originalName,
         savedToRecord: file.status === "SAVED",
+        source: file.source,
+        status: file.status,
         size: file.size,
         url: `/api/client-files/${file.id}`
       },

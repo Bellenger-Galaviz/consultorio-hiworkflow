@@ -12,6 +12,14 @@ type ReminderPayload = {
   title?: string;
 };
 
+type FilePayload = {
+  buffer: Buffer;
+  caption?: string;
+  client: Client;
+  fileName: string;
+  mimeType: string;
+};
+
 export async function sendReminderToN8n(payload: ReminderPayload) {
   const webhookUrl = process.env.N8N_REMINDER_WEBHOOK_URL;
 
@@ -49,6 +57,50 @@ export async function sendReminderToN8n(payload: ReminderPayload) {
         text: payload.message,
         title: payload.title,
         buttons: payload.buttons
+      }
+    })
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(text || `n8n responded with ${response.status}`);
+  }
+
+  return text;
+}
+
+export async function sendFileToN8n(payload: FilePayload) {
+  const webhookUrl = process.env.N8N_REMINDER_WEBHOOK_URL;
+
+  if (!webhookUrl) {
+    throw new Error("N8N_REMINDER_WEBHOOK_URL is not configured.");
+  }
+
+  const response = await fetch(webhookUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-webhook-secret": process.env.N8N_WEBHOOK_SECRET ?? ""
+    },
+    body: JSON.stringify({
+      event: "client.whatsapp.file.requested",
+      sentFrom: process.env.APP_PUBLIC_URL ?? "http://localhost:3000",
+      client: {
+        id: payload.client.id,
+        fullName: payload.client.fullName,
+        phone: payload.client.phone,
+        email: payload.client.email
+      },
+      appointment: null,
+      whatsapp: {
+        to: payload.client.phone,
+        caption: payload.caption ?? "",
+        file: {
+          data: payload.buffer.toString("base64"),
+          fileName: payload.fileName,
+          mimeType: payload.mimeType
+        }
       }
     })
   });

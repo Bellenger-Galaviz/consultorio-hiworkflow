@@ -70,7 +70,7 @@ export async function createClientFile({
   mimeType: string;
   originalName: string;
   source: "MANUAL" | "WHATSAPP";
-  status: "RECEIVED" | "SAVED";
+  status: "RECEIVED" | "SAVED" | "SENT";
   userId: string;
 }) {
   if (buffer.length === 0) {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClientFile } from "@/lib/client-files";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { sendFileToN8n } from "@/lib/n8n";
 
 export async function POST(
   request: Request,
@@ -25,14 +26,25 @@ export async function POST(
   }
 
   try {
+    const buffer = Buffer.from(await uploadedFile.arrayBuffer());
+    const caption = String(formData?.get("caption") ?? "");
+
+    await sendFileToN8n({
+      buffer,
+      caption,
+      client,
+      fileName: uploadedFile.name || "archivo",
+      mimeType: uploadedFile.type || "application/octet-stream"
+    });
+
     const file = await createClientFile({
-      buffer: Buffer.from(await uploadedFile.arrayBuffer()),
-      caption: String(formData?.get("caption") ?? ""),
+      buffer,
+      caption,
       clientId: client.id,
       mimeType: uploadedFile.type || "application/octet-stream",
       originalName: uploadedFile.name || "archivo",
       source: "MANUAL",
-      status: "SAVED",
+      status: "SENT",
       userId: user.id
     });
 
@@ -43,6 +55,8 @@ export async function POST(
         mimeType: file.mimeType,
         name: file.originalName,
         savedToRecord: file.status === "SAVED",
+        source: file.source,
+        status: file.status,
         size: file.size,
         url: `/api/client-files/${file.id}`
       }
@@ -51,7 +65,7 @@ export async function POST(
     const message =
       error instanceof Error && error.message === "FILE_TOO_LARGE"
         ? "El archivo supera el límite de 25 MB."
-        : "No se pudo guardar el archivo.";
+        : "No se pudo enviar el archivo. Revisa n8n o Evolution API.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

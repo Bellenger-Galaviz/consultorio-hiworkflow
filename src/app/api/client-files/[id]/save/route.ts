@@ -30,7 +30,8 @@ export async function POST(
   return NextResponse.json({
     file: {
       id: updatedFile.id,
-      savedToRecord: updatedFile.status === "SAVED"
+      savedToRecord: updatedFile.status === "SAVED",
+      status: updatedFile.status
     }
   });
 }

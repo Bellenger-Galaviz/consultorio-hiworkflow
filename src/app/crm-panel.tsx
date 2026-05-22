@@ -26,6 +26,7 @@ export type CrmMessage = {
     savedToRecord: boolean;
     size: number;
     source: string;
+    status: string;
     url: string;
   };
   id: string;
@@ -51,6 +52,7 @@ export function CrmPanel({
   const [selectedThreadId, setSelectedThreadId] = useState(initialSelectedThreadId);
   const [messages, setMessages] = useState(initialMessages);
   const [draft, setDraft] = useState("");
+  const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
@@ -68,6 +70,17 @@ export function CrmPanel({
   const selectedThread =
     threads.find((thread) => thread.id === selectedThreadId) ?? filteredThreads[0] ?? null;
   const selectedClient = selectedThread?.kind === "client" ? selectedThread : null;
+  const recordFiles = useMemo(
+    () =>
+      messages
+        .filter((message) => message.file?.savedToRecord)
+        .map((message) => ({
+          createdAt: message.createdAt,
+          file: message.file!
+        }))
+        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
+    [messages]
+  );
 
   async function selectThread(thread: CrmThread) {
     setSelectedThreadId(thread.id);
@@ -128,7 +141,7 @@ export function CrmPanel({
   }
 
   async function uploadFile() {
-    const selectedFile = fileInputRef.current?.files?.[0];
+    const selectedFile = selectedUploadFile ?? fileInputRef.current?.files?.[0];
 
     if (!selectedClient || !selectedFile || isUploadingFile) {
       return;
@@ -163,12 +176,14 @@ export function CrmPanel({
             savedToRecord: data.file.savedToRecord,
             size: data.file.size,
             source: "MANUAL",
+            status: data.file.status,
             url: data.file.url
           },
           id: `file-${data.file.id}`,
-          message: `Archivo: ${data.file.name}`
+          message: `Archivo enviado por WhatsApp: ${data.file.name}`
         }
       ]);
+      setSelectedUploadFile(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -201,7 +216,8 @@ export function CrmPanel({
             ...message,
             file: {
               ...message.file,
-              savedToRecord: data.file.savedToRecord
+              savedToRecord: data.file.savedToRecord,
+              status: data.file.status
             }
           };
         })
@@ -287,6 +303,39 @@ export function CrmPanel({
         <div className="border-b border-black/10 px-4 py-3">
           <p className="font-semibold">{selectedThread?.fullName}</p>
           <p className="text-sm text-ink/55">{selectedThread?.phone}</p>
+          {selectedClient ? (
+            <details className="mt-3 rounded-md border border-black/10 bg-paper p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-ink">
+                Expediente del paciente ({recordFiles.length})
+              </summary>
+              <div className="mt-3 grid gap-2">
+                {recordFiles.length > 0 ? (
+                  recordFiles.map(({ createdAt, file }) => (
+                    <a
+                      className="flex items-center justify-between gap-3 rounded-md border border-black/10 bg-white px-3 py-2 text-sm transition hover:border-leaf"
+                      href={file.url}
+                      key={file.id}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <FileText className="shrink-0 text-leaf" size={16} />
+                        <span className="min-w-0">
+                          <span className="block truncate font-semibold">{file.name}</span>
+                          <span className="block text-xs text-ink/55">
+                            {formatFileSize(file.size)} - {formatDateTime(createdAt)}
+                          </span>
+                        </span>
+                      </span>
+                      <ExternalLink className="shrink-0 text-ink/45" size={15} />
+                    </a>
+                  ))
+                ) : (
+                  <p className="text-sm text-ink/55">Aun no hay archivos guardados en el expediente.</p>
+                )}
+              </div>
+            </details>
+          ) : null}
         </div>
 
         <div className="grid max-h-[420px] gap-3 overflow-y-auto bg-paper p-4">
@@ -298,6 +347,7 @@ export function CrmPanel({
           ) : null}
           {messages.map((message) => {
             const isOutbound = message.direction === "OUTBOUND";
+            const isSentFile = message.file?.status === "SENT";
 
             return (
               <div
@@ -333,7 +383,16 @@ export function CrmPanel({
                           <ExternalLink size={14} />
                           Abrir
                         </a>
-                        {message.file.savedToRecord ? (
+                        {isSentFile ? (
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold ${
+                              isOutbound ? "bg-white/15 text-white" : "bg-mint text-leaf"
+                            }`}
+                          >
+                            <CheckCircle2 size={14} />
+                            Enviado por WhatsApp
+                          </span>
+                        ) : message.file.savedToRecord ? (
                           <span
                             className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold ${
                               isOutbound ? "bg-white/15 text-white" : "bg-mint text-leaf"
@@ -370,7 +429,7 @@ export function CrmPanel({
         <div className="grid gap-2 border-t border-black/10 p-3">
           {status ? <p className="text-sm font-semibold text-coral">{status}</p> : null}
           {isSending ? <p className="text-sm font-semibold text-leaf">Enviando...</p> : null}
-          {isUploadingFile ? <p className="text-sm font-semibold text-leaf">Guardando archivo...</p> : null}
+          {isUploadingFile ? <p className="text-sm font-semibold text-leaf">Enviando archivo...</p> : null}
           {selectedThread?.kind === "unknown" ? (
             <a
               className="secondary-button w-fit"
@@ -383,17 +442,32 @@ export function CrmPanel({
             <div className="flex flex-wrap items-center gap-2">
               <label className="secondary-button cursor-pointer" htmlFor="crm-file">
                 <Paperclip size={16} />
-                Adjuntar archivo
+                Adjuntar archivo para enviar
               </label>
               <input
                 className="sr-only"
                 disabled={isUploadingFile}
                 id="crm-file"
                 name="file"
-                onChange={uploadFile}
+                onChange={(event) => setSelectedUploadFile(event.target.files?.[0] ?? null)}
                 ref={fileInputRef}
                 type="file"
               />
+              {selectedUploadFile ? (
+                <>
+                  <span className="max-w-xs truncate text-sm font-semibold text-ink/70">
+                    {selectedUploadFile.name}
+                  </span>
+                  <button
+                    className="primary-button"
+                    disabled={isUploadingFile}
+                    onClick={uploadFile}
+                    type="button"
+                  >
+                    Enviar por WhatsApp
+                  </button>
+                </>
+              ) : null}
             </div>
           ) : null}
           <form className="grid gap-2" onSubmit={sendMessage} ref={formRef}>

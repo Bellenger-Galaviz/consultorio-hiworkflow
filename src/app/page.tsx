@@ -338,6 +338,7 @@ export default async function Home({
             savedToRecord: file.status === "SAVED",
             size: file.size,
             source: file.source,
+            status: file.status,
             url: `/api/client-files/${file.id}`
           },
           id: `file-${file.id}`,
