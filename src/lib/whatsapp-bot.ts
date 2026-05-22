@@ -122,6 +122,7 @@ function hasReprogramLanguage(text: string) {
 
   return (
     /\b(reprogram\w*|reagend\w*|cambi\w*|mov\w*|pospon\w*|aplaz\w*)\b/.test(normalized) ||
+    /\b(pasamela|pasamelo|pasarla|pasarlo|pasar\s+(?:la|lo|mi|esta|esa)|pasame\s+la)\b/.test(normalized) ||
     /\b(otro dia|otra fecha|nueva fecha|siguiente semana|proxima semana|proximo mes)\b/.test(normalized)
   );
 }
@@ -398,6 +399,12 @@ function inferRequestedTime(message: string) {
   }
 
   return minutesToTime(hour * 60 + minute);
+}
+
+function hasSameTimeReference(message: string) {
+  const normalized = normalizeText(message);
+
+  return /\b(misma hora|mismo horario|igual hora|igual horario|a esa hora|esa misma hora)\b/.test(normalized);
 }
 
 function hasExplicitTime(message: string) {
@@ -1686,11 +1693,19 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
       ? proposedDateFromPreviousDayTime
       : null;
   const requestedDayWithoutTime =
-    !explicitTime && getMentionedWeekday(input.message) !== null
+    !explicitTime
       ? inferRequestedDay(input.message, {
           rangeStart: requestedRange?.rangeStart ?? previousState?.rangeStart,
           rangeEnd: requestedRange?.rangeEnd ?? previousState?.rangeEnd
         })
+      : null;
+  const proposedDateFromSameTimeReference =
+    requestedDayWithoutTime && hasSameTimeReference(input.message)
+      ? zonedDateTimeToUtc(requestedDayWithoutTime, formatInputTime(appointment.startsAt))
+      : null;
+  const validProposedDateFromSameTimeReference =
+    proposedDateFromSameTimeReference && proposedDateFromSameTimeReference > new Date()
+      ? proposedDateFromSameTimeReference
       : null;
   const selectedOption = getSelectedOptionFromMessage(input.message, input.agent);
   const asksAvailability = isAvailabilityQuestion(input.message) || input.agent?.intent === "AVAILABILITY_QUERY";
@@ -1708,6 +1723,16 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
 
   if (appointment.status === "REPROGRAM_PENDING" && effectiveHasResponseContext && selectedOption) {
     return selectOfferedAvailabilityOption(appointment, selectedOption);
+  }
+
+  if (
+    appointment.status === "REPROGRAM_PENDING" &&
+    effectiveHasResponseContext &&
+    validProposedDateFromSameTimeReference
+  ) {
+    return asksAvailability
+      ? replyWithExactAvailability(appointment, validProposedDateFromSameTimeReference)
+      : reprogramAppointment(appointment, validProposedDateFromSameTimeReference);
   }
 
   if (appointment.status === "REPROGRAM_PENDING" && effectiveHasResponseContext && requestedDayWithoutTime) {
@@ -1906,6 +1931,10 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
       return reprogramAppointment(appointment, proposedDate);
     }
 
+    if (validProposedDateFromSameTimeReference) {
+      return reprogramAppointment(appointment, validProposedDateFromSameTimeReference);
+    }
+
     if (effectiveIntent === "REPROGRAM_REQUEST") {
       const reprogrammingAppointment = await prisma.appointment.update({
         where: { id: appointment.id },
@@ -1943,6 +1972,10 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
 
   if (appointment.status === "REPROGRAM_PENDING" && proposedDate) {
     return reprogramAppointment(appointment, proposedDate);
+  }
+
+  if (appointment.status === "REPROGRAM_PENDING" && validProposedDateFromSameTimeReference) {
+    return reprogramAppointment(appointment, validProposedDateFromSameTimeReference);
   }
 
   if (appointment.status === "REPROGRAM_PENDING" && effectiveIntent === "CONFIRM") {
@@ -2013,6 +2046,10 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
   }
 
   if (effectiveIntent === "REPROGRAM_REQUEST") {
+    if (validProposedDateFromSameTimeReference) {
+      return reprogramAppointment(appointment, validProposedDateFromSameTimeReference);
+    }
+
     const reprogrammingAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
       data: { status: "REPROGRAM_PENDING", statusChangedAt: new Date() },

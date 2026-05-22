@@ -4,6 +4,7 @@ import {
   LogOut,
   MessageCircle,
   Plus,
+  Upload,
   UserPlus,
   Users
 } from "lucide-react";
@@ -19,6 +20,7 @@ import {
   createWaitlistEntry,
   deleteClient,
   deleteWaitlistEntry,
+  importClients,
   offerWaitlistSlot,
   sendAppointmentReminder,
   updateClient,
@@ -503,6 +505,35 @@ export default async function Home({
                 Guardar cliente
               </button>
             </form>
+            <div className="mt-5 border-t border-black/10 pt-5">
+              <div className="mb-3 flex items-start gap-2">
+                <div className="rounded-md bg-mint p-2 text-leaf">
+                  <Upload size={16} />
+                </div>
+                <div>
+                  <p className="font-semibold">Carga masiva</p>
+                  <p className="text-sm text-ink/60">
+                    Sube un CSV o Excel con columnas: Nombre completo, WhatsApp, Correo y Notas.
+                  </p>
+                </div>
+              </div>
+              <form action={importClients} className="grid gap-3" encType="multipart/form-data">
+                <label className="grid gap-1">
+                  <span className="label">Archivo CSV</span>
+                  <input
+                    accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                    className="field"
+                    name="clientsFile"
+                    required
+                    type="file"
+                  />
+                </label>
+                <button className="secondary-button" type="submit">
+                  <Upload size={16} />
+                  Importar clientes
+                </button>
+              </form>
+            </div>
           </Panel>
 
           <Panel title="Nueva cita" icon={<CalendarClock size={18} />}>

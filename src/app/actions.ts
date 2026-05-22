@@ -19,6 +19,13 @@ const clientSchema = z.object({
   notes: z.string().optional()
 });
 
+type ImportedClientRow = {
+  email: string;
+  fullName: string;
+  notes: string;
+  phone: string;
+};
+
 const appointmentSchema = z.object({
   appointmentDate: z.string().min(1),
   appointmentTime: z.string().min(1),
@@ -101,6 +108,145 @@ function normalizeName(name: string) {
     .trim();
 }
 
+function normalizeHeader(value: string) {
+  return normalizeName(value).replace(/[^a-z0-9]/g, "");
+}
+
+function detectCsvDelimiter(firstLine: string) {
+  const candidates = [",", ";", "\t"];
+
+  return candidates.reduce((best, delimiter) => {
+    const count = firstLine.split(delimiter).length;
+    const bestCount = firstLine.split(best).length;
+
+    return count > bestCount ? delimiter : best;
+  }, ",");
+}
+
+function parseCsv(text: string) {
+  const delimiter = detectCsvDelimiter(text.split(/\r?\n/, 1)[0] ?? "");
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let value = "";
+  let insideQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === "\"") {
+      if (insideQuotes && next === "\"") {
+        value += "\"";
+        index += 1;
+      } else {
+        insideQuotes = !insideQuotes;
+      }
+
+      continue;
+    }
+
+    if (char === delimiter && !insideQuotes) {
+      row.push(value.trim());
+      value = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !insideQuotes) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+
+      row.push(value.trim());
+      if (row.some(Boolean)) {
+        rows.push(row);
+      }
+      row = [];
+      value = "";
+      continue;
+    }
+
+    value += char;
+  }
+
+  row.push(value.trim());
+  if (row.some(Boolean)) {
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+async function parseImportedClientRows(file: File) {
+  const lowerName = file.name.toLowerCase();
+
+  if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const firstSheetName = workbook.SheetNames[0];
+
+    if (!firstSheetName) {
+      return [];
+    }
+
+    const sheet = workbook.Sheets[firstSheetName];
+
+    return XLSX.utils
+      .sheet_to_json<string[]>(sheet, { defval: "", header: 1, raw: false })
+      .map((row) => row.map((cell) => String(cell).trim()))
+      .filter((row) => row.some(Boolean));
+  }
+
+  return parseCsv(await file.text());
+}
+
+function getHeaderIndex(headers: string[], aliases: string[]) {
+  return headers.findIndex((header) => aliases.includes(normalizeHeader(header)));
+}
+
+function mapCsvClients(rows: string[]) {
+  const headers = rows.map(normalizeHeader);
+  const hasKnownHeaders = headers.some((header) =>
+    ["nombre", "nombrecompleto", "whatsapp", "telefono", "celular", "correo", "email"].includes(header)
+  );
+
+  if (!hasKnownHeaders) {
+    return {
+      dataStartIndex: 0,
+      emailIndex: 2,
+      fullNameIndex: 0,
+      notesIndex: 3,
+      phoneIndex: 1
+    };
+  }
+
+  return {
+    dataStartIndex: 1,
+    emailIndex: getHeaderIndex(rows, ["correo", "email", "mail"]),
+    fullNameIndex: getHeaderIndex(rows, ["nombre", "nombrecompleto", "cliente", "paciente"]),
+    notesIndex: getHeaderIndex(rows, ["notas", "nota", "observaciones", "comentarios"]),
+    phoneIndex: getHeaderIndex(rows, [
+      "whatsapp",
+      "telefono",
+      "telefonowhatsapp",
+      "celular",
+      "celularwhatsapp",
+      "numero",
+      "numerowhatsapp",
+      "numerodewhatsapp",
+      "phone"
+    ])
+  };
+}
+
+function readImportedClient(row: string[], indexes: ReturnType<typeof mapCsvClients>): ImportedClientRow {
+  return {
+    email: indexes.emailIndex >= 0 ? row[indexes.emailIndex]?.trim() ?? "" : "",
+    fullName: row[indexes.fullNameIndex]?.trim() ?? "",
+    notes: indexes.notesIndex >= 0 ? row[indexes.notesIndex]?.trim() ?? "" : "",
+    phone: normalizePhone(row[indexes.phoneIndex] ?? "")
+  };
+}
+
 export async function createClient(formData: FormData) {
   const user = await requireUser();
   const result = clientSchema.safeParse(Object.fromEntries(formData));
@@ -178,6 +324,92 @@ export async function createClient(formData: FormData) {
 
   revalidatePath("/");
   goHomeWithSuccess("Cliente guardado.");
+}
+
+export async function importClients(formData: FormData) {
+  const user = await requireUser();
+  const file = formData.get("clientsFile");
+
+  if (!(file instanceof File) || file.size === 0) {
+    goHomeWithError("Selecciona un archivo CSV o Excel con tus clientes.");
+  }
+
+  if (file.size > 5 * 1024 * 1024) {
+    goHomeWithError("El archivo es demasiado grande. Usa un CSV o Excel de máximo 5 MB.");
+  }
+
+  const rows = await parseImportedClientRows(file).catch(() => []);
+
+  if (rows.length === 0) {
+    goHomeWithError("El archivo está vacío o no se pudo leer.");
+  }
+
+  const indexes = mapCsvClients(rows[0]);
+
+  if (indexes.fullNameIndex < 0 || indexes.phoneIndex < 0) {
+    goHomeWithError("El archivo debe incluir las columnas Nombre completo y WhatsApp.");
+  }
+
+  const existingClients = await prisma.client.findMany({
+    where: { userId: user.id },
+    select: { fullName: true, phone: true }
+  });
+  const existingPhones = new Set(existingClients.map((client) => normalizePhone(client.phone)));
+  const existingNames = new Set(existingClients.map((client) => normalizeName(client.fullName)));
+  const filePhones = new Set<string>();
+  const fileNames = new Set<string>();
+  const clientsToImport: z.infer<typeof clientSchema>[] = [];
+  let skipped = 0;
+
+  for (const row of rows.slice(indexes.dataStartIndex)) {
+    const client = readImportedClient(row, indexes);
+    const validation = clientSchema.safeParse(client);
+    const normalizedName = normalizeName(client.fullName);
+
+    if (
+      !validation.success ||
+      existingPhones.has(client.phone) ||
+      existingNames.has(normalizedName) ||
+      filePhones.has(client.phone) ||
+      fileNames.has(normalizedName)
+    ) {
+      skipped += 1;
+      continue;
+    }
+
+    filePhones.add(client.phone);
+    fileNames.add(normalizedName);
+    clientsToImport.push(validation.data);
+  }
+
+  if (clientsToImport.length === 0) {
+    goHomeWithError("No se importó ningún cliente. Revisa duplicados, nombres, WhatsApp y correos.");
+  }
+
+  try {
+    await prisma.$transaction(
+      clientsToImport.map((client) =>
+        prisma.client.create({
+          data: {
+            userId: user.id,
+            fullName: client.fullName,
+            phone: client.phone,
+            email: client.email || null,
+            notes: client.notes || null
+          }
+        })
+      )
+    );
+  } catch {
+    goHomeWithError("No se pudieron importar los clientes. Revisa el archivo e intenta de nuevo.");
+  }
+
+  revalidatePath("/");
+  goHomeWithSuccess(
+    `Importación completa: ${clientsToImport.length} cliente${clientsToImport.length === 1 ? "" : "s"} agregado${
+      clientsToImport.length === 1 ? "" : "s"
+    }${skipped > 0 ? `, ${skipped} omitido${skipped === 1 ? "" : "s"}` : ""}.`
+  );
 }
 
 export async function deleteClient(formData: FormData) {
