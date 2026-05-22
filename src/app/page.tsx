@@ -519,7 +519,7 @@ export default async function Home({
               </div>
               <form action={importClients} className="grid gap-3" encType="multipart/form-data">
                 <label className="grid gap-1">
-                  <span className="label">Archivo CSV</span>
+                  <span className="label">Archivo CSV o Excel</span>
                   <input
                     accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                     className="field"
