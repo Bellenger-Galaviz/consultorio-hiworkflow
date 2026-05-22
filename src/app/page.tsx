@@ -27,7 +27,9 @@ import {
   updateAppointmentStatus
 } from "./actions";
 import { AppointmentForm } from "./appointment-form";
+import { AutoSubmitDateInput } from "./auto-submit-date-input";
 import { logoutDoctor } from "./auth-actions";
+import { ClientFilesHistory } from "./client-files-history";
 import { ClientManager } from "./client-manager";
 import { ClientNotesHistory } from "./client-notes-history";
 import { ConfirmSubmitButton } from "./confirm-submit-button";
@@ -109,6 +111,20 @@ export default async function Home({
                 notes: true,
                 startsAt: true,
                 title: true
+              }
+            },
+            files: {
+              where: {
+                userId: user.id,
+                status: "SAVED"
+              },
+              orderBy: { createdAt: "desc" },
+              select: {
+                createdAt: true,
+                id: true,
+                mimeType: true,
+                originalName: true,
+                size: true
               }
             }
           }
@@ -456,11 +472,8 @@ export default async function Home({
                   ) : null}
                   <label className="grid gap-1">
                     <span className="label">Día</span>
-                    <input className="field w-44" defaultValue={selectedDay} name="day" type="date" />
+                    <AutoSubmitDateInput className="field w-44" defaultValue={selectedDay} name="day" />
                   </label>
-                  <button className="secondary-button" type="submit">
-                    Ver día
-                  </button>
                 </form>
                 <Link
                   className="secondary-button"
@@ -470,7 +483,7 @@ export default async function Home({
                     chatSearch: params.chatSearch
                   })}
                 >
-                  Limpiar filtro
+                  Hoy
                 </Link>
               </div>
             </div>
@@ -529,6 +542,16 @@ export default async function Home({
                               appointmentNotes: appointment.client.appointments,
                               clientNotes: appointment.client.notes
                             })}
+                          />
+                          <ClientFilesHistory
+                            files={appointment.client.files.map((file) => ({
+                              createdAt: file.createdAt.toISOString(),
+                              id: file.id,
+                              mimeType: file.mimeType,
+                              name: file.originalName,
+                              size: file.size,
+                              url: `/api/client-files/${file.id}`
+                            }))}
                           />
                         </div>
                       </td>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, ExternalLink, FileText, Paperclip } from "lucide-react";
 import { APP_TIME_ZONE } from "@/lib/timezone";
@@ -47,6 +47,7 @@ export function CrmPanel({
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const [, startTransition] = useTransition();
   const [search, setSearch] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState(initialSelectedThreadId);
@@ -81,6 +82,16 @@ export function CrmPanel({
         .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
     [messages]
   );
+
+  useEffect(() => {
+    const container = messagesRef.current;
+
+    if (!container || isLoadingMessages) {
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
+  }, [messages, isLoadingMessages, selectedThreadId]);
 
   async function selectThread(thread: CrmThread) {
     setSelectedThreadId(thread.id);
@@ -338,7 +349,7 @@ export function CrmPanel({
           ) : null}
         </div>
 
-        <div className="grid max-h-[420px] gap-3 overflow-y-auto bg-paper p-4">
+        <div className="grid max-h-[420px] gap-3 overflow-y-auto bg-paper p-4" ref={messagesRef}>
           {isLoadingMessages ? (
             <p className="text-center text-sm text-ink/55">Cargando conversacion...</p>
           ) : null}
