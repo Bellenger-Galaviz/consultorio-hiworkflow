@@ -138,9 +138,7 @@ export async function sendDueAutomaticReminders() {
         gt: now,
         lte: next24Hours
       },
-      status: {
-        in: ["PENDING", "CONFIRMED"]
-      }
+      status: "PENDING"
     },
     include: { client: true },
     orderBy: { startsAt: "asc" },
@@ -163,7 +161,7 @@ export async function sendDueAutomaticReminders() {
       });
     }
 
-    if (appointment.status === "PENDING" && isIn1HourReminderWindow) {
+    if (isIn1HourReminderWindow) {
       results.push({
         appointmentId: appointment.id,
         type: "REMINDER_1H",

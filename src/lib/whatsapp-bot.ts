@@ -2000,6 +2000,10 @@ async function handleIncomingWhatsAppMessageCore(input: IncomingMessage) {
     return { ok: true, action: "REPROGRAM_CONFIRM_REJECTED", appointmentId: appointment.id };
   }
 
+  if (appointment.status === "CONFIRMED" && effectiveIntent === "CONFIRM") {
+    return { ok: true, action: "ALREADY_CONFIRMED_IGNORED", appointmentId: appointment.id };
+  }
+
   if (effectiveIntent === "CONFIRM") {
     const confirmedAppointment = await prisma.appointment.update({
       where: { id: appointment.id },
