@@ -1,0 +1,525 @@
+{
+  "name": "Recibir respuestas WhatsApp y actualizar citas",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-respuesta",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1ee50d4-8bec-42d1-a108-9ac783a5daea",
+      "name": "Webhook - Respuesta Evolution API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        16
+      ],
+      "webhookId": "9e99611b-edad-4f86-9741-8a12b5962580"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst data = body.data ?? body;\nconst key = data.key ?? {};\nconst messageObject = data.message ?? {};\n\nconst remoteJid = key.remoteJid ?? key.remoteJidAlt ?? body.remoteJid ?? body.from ?? body.phone ?? body.sender ?? '';\nconst remoteJidText = String(remoteJid);\nconst phone = remoteJidText.replace(/@s\\.whatsapp\\.net|@g\\.us/g, '').replace(/\\D/g, '');\n\nfunction valueToText(value) {\n  if (value === undefined || value === null) return '';\n  if (typeof value === 'string') return value.trim();\n  if (typeof value === 'number') return String(value);\n  return '';\n}\n\nfunction firstText(...values) {\n  for (const value of values) {\n    const text = valueToText(value);\n    if (text) return text;\n  }\n  return '';\n}\n\nfunction getButtonText(message) {\n  const buttonResponse = message.buttonsResponseMessage;\n  const templateReply = message.templateButtonReplyMessage;\n  const listReply = message.listResponseMessage?.singleSelectReply;\n  const nativeParams = message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;\n\n  let nativeText = '';\n  if (nativeParams) {\n    try {\n      const parsed = JSON.parse(nativeParams);\n      nativeText = firstText(parsed.id, parsed.button_id, parsed.selectedId, parsed.display_text);\n    } catch (error) {}\n  }\n\n  return firstText(\n    buttonResponse?.selectedButtonId,\n    buttonResponse?.selectedDisplayText,\n    templateReply?.selectedId,\n    templateReply?.selectedDisplayText,\n    listReply?.selectedRowId,\n    listReply?.title,\n    nativeText\n  );\n}\n\nconst buttonText = getButtonText(messageObject);\nconst message = firstText(\n  body.message,\n  body.text,\n  body.body,\n  messageObject.conversation,\n  messageObject.extendedTextMessage?.text,\n  messageObject.imageMessage?.caption,\n  messageObject.videoMessage?.caption,\n  messageObject.documentMessage?.caption,\n  messageObject.buttonsResponseMessage?.selectedDisplayText,\n  messageObject.templateButtonReplyMessage?.selectedDisplayText,\n  buttonText\n);\n\nconst fromMe = key.fromMe === true || data.fromMe === true || body.fromMe === true;\nconst isGroup = remoteJidText.includes('@g.us') || remoteJidText.toLowerCase().includes('group') || phone.length > 15;\n\nconst normalized = message\n  .toLowerCase()\n  .normalize('NFD')\n  .replace(/[\\u0300-\\u036f]/g, '')\n  .trim();\n\nconst isSystemEcho =\n  fromMe &&\n  (\n    (normalized.startsWith('hola ') && (normalized.includes('recordamos') || normalized.includes('tu cita') || normalized.includes('su cita'))) ||\n    normalized.startsWith('gracias ') ||\n    normalized.startsWith('claro ') ||\n    normalized.startsWith('entendido ') ||\n    normalized.startsWith('listo ') ||\n    normalized.startsWith('ese horario ') ||\n    normalized.includes('estos son algunos espacios disponibles') ||\n    normalized.includes('estas son las opciones mas cercanas') ||\n    normalized.includes('si hay disponibilidad') ||\n    normalized.includes('no tengo disponibilidad') ||\n    normalized.includes('lo mas cercano que encontre') ||\n    normalized.includes('puede elegir una opcion') ||\n    normalized.includes('responde con el numero de la opcion') ||\n    normalized.includes('no pude identificar') ||\n    normalized.includes('fecha y hora que enviaste ya pasaron') ||\n    normalized.includes('no encontre horarios disponibles') ||\n    normalized.includes('registramos tu nueva cita') ||\n    normalized.includes('esta cita esta pendiente')\n  );\n\nlet skip = false;\nlet skipReason = null;\n\nif (isGroup) {\n  skip = true;\n  skipReason = 'IGNORED_GROUP_MESSAGE';\n} else if (isSystemEcho) {\n  skip = true;\n  skipReason = 'IGNORED_SYSTEM_ECHO';\n} else if (!phone || !message) {\n  skip = true;\n  skipReason = 'IGNORED_EMPTY_MESSAGE';\n}\n\nreturn [{ json: { phone, message, fromMe, remoteJid: remoteJidText, skip, skipReason } }];"
+      },
+      "id": "cfb3d084-c58d-4d93-a925-df63c8e44473",
+      "name": "Normalizar mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "process-message",
+              "leftValue": "={{$json.skip}}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e6990299-c8e2-4513-ab12-607acb04a06f",
+      "name": "Procesar mensaje?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        464,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ ['Telefono: ' + $json.phone, 'Mensaje del cliente: ' + $json.message, 'Fecha actual del sistema: ' + $now.setZone('America/Chihuahua').toFormat('yyyy-MM-dd HH:mm'), 'Zona horaria: America/Chihuahua'].join('\\n') }}",
+        "options": {
+          "systemMessage": "Eres un clasificador de intenciones para una recepcion medica por WhatsApp.\n\nTu unica tarea es clasificar lo que quiere el paciente. No respondas al paciente. Devuelve solamente JSON valido.\n\nPrincipio principal:\nIdentifica la intencion global del paciente, no palabras aisladas. Si el paciente dice que no puede ir PERO pide mover, cambiar, posponer, reagendar, otro dia, otra fecha, siguiente semana o disponibilidad, su intencion es REPROGRAMAR, NO cancelar.\n\nIntenciones:\nCONFIRM: confirma asistencia o acepta un horario propuesto.\nCANCEL: cancela definitivamente sin pedir otra fecha.\nREPROGRAM_REQUEST: quiere cambiar/mover/posponer/reagendar, pero no dio fecha y hora exacta.\nREPROGRAM_DATETIME: quiere cambiar y dio fecha o dia con hora explicita.\nAVAILABILITY_QUERY: pregunta por disponibilidad, dias, rangos, horarios, o menciona un dia/rango sin hora.\nOPTION_SELECTION: elige una opcion ofrecida.\nUNKNOWN: no hay intencion clara.\n\nDevuelve exactamente:\n{\"intent\":\"CONFIRM|CANCEL|REPROGRAM_REQUEST|REPROGRAM_DATETIME|AVAILABILITY_QUERY|OPTION_SELECTION|UNKNOWN\",\"normalizedDateTime\":null,\"rangeStart\":null,\"rangeEnd\":null,\"period\":null,\"selectedOption\":null}\n\nReglas criticas:\n- \"no podre ir, podemos moverla para otro dia\" = REPROGRAM_REQUEST.\n- \"no alcanzare, la podemos posponer\" = REPROGRAM_REQUEST.\n- \"podemos moverla para la siguiente semana\" = AVAILABILITY_QUERY con rango de la siguiente semana.\n- \"tienes disponibilidad la siguiente semana\" = AVAILABILITY_QUERY con rango de la siguiente semana.\n- \"el viernes\" sin hora = AVAILABILITY_QUERY, normalizedDateTime null.\n- \"viernes a las 4\" = REPROGRAM_DATETIME.\n- Solo llena normalizedDateTime si el paciente dio dia/fecha Y hora explicita.\n- Prohibido inventar horas por defecto.\n- Si menciona un dia de semana, la fecha calculada debe caer exactamente en ese dia.\n\nFechas y zona horaria:\nUsa la fecha actual enviada en el mensaje y zona America/Chihuahua.\nrangeStart/rangeEnd van en AAAA-MM-DD.\nnormalizedDateTime va en DD/MM/AAAA HH:mm.\n\nRangos:\n- siguiente/proxima semana: lunes a domingo de la semana siguiente.\n- esta semana: hoy a domingo.\n- proximo mes: primer dia a ultimo dia del proximo mes.\n- manana: mismo dia en rangeStart/rangeEnd.\n\nPeriodos:\nmorning para ma?ana/mananas/temprano.\nafternoon para tarde/medio dia/despues de comer.\nevening para noche.\nnull si no especifica.\n\nOpciones:\n1 -> selectedOption 1; opcion 2 -> 2; la primera -> 1; la segunda -> 2."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        736,
+        0
+      ],
+      "id": "325334b4-f293-4aca-adce-82994977ae2b",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        688,
+        256
+      ],
+      "id": "b4811988-879c-46d4-bd4e-ed95a03fc263",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "F6hBFrpUIwXYsKbh",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Normalizar mensaje').item.json.phone }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        848,
+        256
+      ],
+      "id": "e8977b9a-02b0-4d6f-95ce-20d65c983215",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Normalizar mensaje').first().json;\n\nlet agent = null;\nconst raw = $json.output ?? $json.text ?? $json.response ?? $json;\n\nif (typeof raw === 'string' && raw.trim()) {\n  let cleaned = raw.trim();\n  if (cleaned.startsWith('```')) {\n    cleaned = cleaned.replace(/^```[a-zA-Z]*\\s*/, '').replace(/```$/, '').trim();\n  }\n  try {\n    agent = JSON.parse(cleaned);\n  } catch (error) {\n    agent = null;\n  }\n} else if (raw && typeof raw === 'object' && raw.intent) {\n  agent = raw;\n}\n\nif (agent && typeof agent === 'object') {\n  agent = Object.fromEntries(\n    Object.entries(agent).filter(([, value]) => value !== null && value !== undefined && value !== '')\n  );\n}\n\nreturn [{\n  json: {\n    phone: original.phone,\n    message: original.message,\n    agent\n  }\n}];"
+      },
+      "id": "fc0d82b5-5922-46e3-8fcd-44d0c7c3fb7b",
+      "name": "Preparar payload sistema con IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://consultorio.hiworkflow.mx/api/whatsapp/inbound",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-webhook-secret",
+              "value": "CAMBIA_ESTE_SECRETO_POR_UNO_LARGO"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phone\": \"{{$json.phone}}\",\n  \"message\": \"{{$json.message}}\",\n  \"deliveryMode\": \"COLLECT\",\n  \"agent\": {{$json.agent ? JSON.stringify($json.agent) : \"{}\"}}\n}",
+        "options": {}
+      },
+      "id": "0e3bbb48-6e54-4cbb-af50-5f9e53425a7e",
+      "name": "Enviar respuesta al sistema",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true\n}",
+        "options": {}
+      },
+      "id": "00a71c05-f3c2-499f-8b04-0122d6057601",
+      "name": "Responder OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2288,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"ignored\":true,\"reason\":\"{{$json.skipReason}}\"}",
+        "options": {}
+      },
+      "id": "e9f92c49-a8fc-429b-8156-f702967f293d",
+      "name": "Responder evento ignorado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        736,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer PEGA_AQUI_TU_API_KEY_DE_OPENAI"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4.1-mini\",\n  \"temperature\": 0,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Eres un clasificador para un sistema de citas m?dicas. No redactes respuestas al paciente. Devuelve SOLO JSON v?lido. Intenciones permitidas: CONFIRM, CANCEL, REPROGRAM_REQUEST, REPROGRAM_DATETIME, AVAILABILITY_QUERY, OPTION_SELECTION, UNKNOWN. Extrae fechas naturales en espa?ol usando la fecha actual 2026-05-19 y zona America/Chihuahua. Si el cliente dice ma?ana, siguiente semana, pr?ximo mes, martes, 25 de mayo, 2pm, etc., normaliza cuando sea posible. normalizedDateTime debe ir como DD/MM/AAAA HH:mm. rangeStart y rangeEnd deben ir como AAAA-MM-DD. period puede ser morning, afternoon, evening o null. selectedOption es n?mero si el mensaje elige una opci?n. No inventes fechas exactas si s?lo pregunta por un rango.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Mensaje del cliente: {{$json.message}}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "clasificar-mensaje-con-ia-http",
+      "name": "Clasificar mensaje con IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        736,
+        -288
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Normalizar mensaje').first().json;\nconst result = $json ?? {};\nconst reply = Array.isArray(result.replies) ? result.replies[0] : null;\n\nif (!reply?.message || !reply?.to) {\n  return [{\n    json: {\n      shouldSend: false,\n      reason: 'NO_REPLY_FROM_SYSTEM',\n      systemResult: result\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    shouldSend: true,\n    phone: String(reply.to).replace(/\\D/g, ''),\n    clientName: reply.clientName,\n    appointmentTitle: reply.appointmentTitle,\n    appointmentStartsAt: reply.appointmentStartsAt,\n    action: result.action,\n    customerMessage: original.message,\n    systemReply: reply.message,\n    systemResult: result\n  }\n}];"
+      },
+      "id": "preparar-redaccion-ia",
+      "name": "Preparar redaccion IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-reply",
+              "leftValue": "={{$json.shouldSend}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "hay-respuesta-para-enviar",
+      "name": "Hay respuesta para enviar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ ['Cliente: ' + ($json.clientName || ''), 'Mensaje original del cliente: ' + ($json.customerMessage || ''), 'Accion del sistema: ' + ($json.action || ''), 'Respuesta oficial del sistema: ' + ($json.systemReply || '')].join('\\n') }}",
+        "options": {
+          "systemMessage": "Eres redactor de recepcion medica por WhatsApp.\n\nReescribe la respuesta oficial del sistema para que suene natural, profesional, clara y humana. Debe parecer una conversacion real de recepcion, no un aviso automatico.\n\nReglas:\n- Devuelve solo el texto final para WhatsApp.\n- No inventes disponibilidad, fechas, horas, nombres, titulos ni estados.\n- No cambies fechas ni horas.\n- No cambies la decision del sistema.\n- Si el cliente pregunto \"se puede?\" y el sistema ya reprogramo, responde como: \"Si, tenemos ese horario disponible. Ya quedo...\".\n- Evita cierres frios como \"Quedamos atentos a cualquier otra consulta\" salvo que sea realmente necesario.\n- Evita repetir el nombre completo del paciente si el mensaje ya suena pesado; puedes usar solo el primer nombre.\n- Si la respuesta oficial pide dia y hora, no agregues ejemplos largos.\n- Si la respuesta oficial muestra disponibilidad general, no la conviertas en horarios exactos.\n- Nunca menciones botones.\n- Nunca pidas palabras exactas como CONFIRMO, CANCELAR o REPROGRAMAR.\n- No uses frases tipo formulario como \"puedes indicarme algo como...\".\n- Si hay opciones, cierra de forma natural.\n- Usa tono formal-cercano: amable, breve y seguro.\n- No digas que eres IA.\n\nSi no puedes mejorar la respuesta sin cambiar datos, devuelve la respuesta oficial casi igual."
+        }
+      },
+      "id": "redactar-respuesta-ia",
+      "name": "Redactar respuesta con IA",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1984,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prepared = $('Preparar redaccion IA').first().json;\nconst raw = $json.output ?? $json.text ?? $json.response ?? '';\nconst text = typeof raw === 'string' && raw.trim() ? raw.trim() : prepared.systemReply;\n\nif (!prepared.phone || !text) {\n  throw new Error('Faltan numero o texto para enviar WhatsApp');\n}\n\nreturn [{\n  json: {\n    evolutionPayload: {\n      number: prepared.phone,\n      text\n    }\n  }\n}];"
+      },
+      "id": "preparar-envio-evolution-redactado",
+      "name": "Preparar envio Evolution redactado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2304,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://evo.hiworkflow.mx/message/sendText/consultorioPrueba",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "1234567890987654321"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.evolutionPayload}}",
+        "options": {}
+      },
+      "id": "enviar-whatsapp-redactado-evolution",
+      "name": "Enviar WhatsApp redactado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2480,
+        -96
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Respuesta Evolution API": {
+      "main": [
+        [
+          {
+            "node": "Normalizar mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar mensaje": {
+      "main": [
+        [
+          {
+            "node": "Procesar mensaje?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar mensaje?": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder evento ignorado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Preparar payload sistema con IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar payload sistema con IA": {
+      "main": [
+        [
+          {
+            "node": "Enviar respuesta al sistema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar respuesta al sistema": {
+      "main": [
+        [
+          {
+            "node": "Preparar redaccion IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar redaccion IA": {
+      "main": [
+        [
+          {
+            "node": "Hay respuesta para enviar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hay respuesta para enviar?": {
+      "main": [
+        [
+          {
+            "node": "Redactar respuesta con IA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redactar respuesta con IA": {
+      "main": [
+        [
+          {
+            "node": "Preparar envio Evolution redactado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar envio Evolution redactado": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp redactado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WhatsApp redactado": {
+      "main": [
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Redactar respuesta con IA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar mensaje con IA": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "ac372a94-8fa2-4427-81d3-7b245dcbf238",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5b3b7773a095832dea4f30e848125e5009bd06a9efd798b7d0c660e8372bb34f"
+  },
+  "id": "4Ge6qXpz6ooHEKiZ",
+  "tags": []
+}

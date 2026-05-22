@@ -1,0 +1,74 @@
+{
+  "name": "Ejecutar recordatorios automáticos de citas",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "f38fce7e-0e60-4713-b076-f16691422427",
+      "name": "Cada 15 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://consultorio.hiworkflow.mx/api/reminders/due",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-webhook-secret",
+              "value": "CAMBIA_ESTE_SECRETO_POR_UNO_LARGO"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3c1df1dc-44c0-45a0-a2f1-9ea06b73c355",
+      "name": "Llamar sistema de citas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        272,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Cada 15 minutos": {
+      "main": [
+        [
+          {
+            "node": "Llamar sistema de citas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "7b18359b-aac7-487c-b958-a96f6f807eb0",
+  "meta": {
+    "instanceId": "5b3b7773a095832dea4f30e848125e5009bd06a9efd798b7d0c660e8372bb34f"
+  },
+  "id": "lDoUW6FaGPnuXt3c",
+  "tags": []
+}

@@ -1,0 +1,219 @@
+{
+  "name": "Recordatorio de cita por WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "recordatorio-cita",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "ac63b98f-aeae-4dde-baf5-ad527005a8dd",
+      "name": "Webhook - Sistema de citas",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -336,
+        320
+      ],
+      "webhookId": "aed30c02-90f3-416d-accf-387c7e339698"
+    },
+    {
+      "parameters": {
+        "jsCode": "const expectedSecret = 'CAMBIA_ESTE_SECRETO_POR_UNO_LARGO';\nconst receivedSecret = $json.headers?.['x-webhook-secret'] ?? '';\n\nreturn [\n  {\n    json: {\n      ...$json,\n      authorized: receivedSecret === expectedSecret,\n    },\n  },\n];"
+      },
+      "id": "ec7fc638-2e9c-4f2e-af94-9ce570d8847d",
+      "name": "Validar secreto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -96,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "authorized-condition",
+              "leftValue": "={{$json.authorized}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cbb4ca0a-bea0-4cfa-95a7-b4314f65eda6",
+      "name": "Autorizado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        128,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const whatsapp = $json.body?.whatsapp ?? {};\nconst client = $json.body?.client ?? {};\n\nconst number = String(whatsapp.to ?? client.phone ?? '').replace(/\\D/g, '');\nconst text = String(whatsapp.message ?? whatsapp.text ?? '').trim();\n\nif (!number || !text) {\n  throw new Error('Faltan number o text para Evolution API');\n}\n\nreturn [\n  {\n    json: {\n      ...$json,\n      evolutionPayload: {\n        number,\n        text,\n      },\n    },\n  },\n];"
+      },
+      "id": "926b73d4-e507-41cd-89a7-077240fe67ac",
+      "name": "Preparar payload Evolution",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://evo.hiworkflow.mx/message/sendText/consultorioPrueba",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "1234567890987654321"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.evolutionPayload}}",
+        "options": {}
+      },
+      "id": "a9189aca-91a8-4ca6-bc06-0fe27b3c97f5",
+      "name": "Enviar WhatsApp - Evolution API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true,\n  \"provider\": \"evolution-api\",\n  \"client\": \"{{$json.body.client.fullName}}\"\n}",
+        "options": {}
+      },
+      "id": "3428c712-f04d-44b6-ad3b-f388ef0ac9e3",
+      "name": "Responder OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": false,\n  \"error\": \"Secreto inv?lido\"\n}",
+        "options": {}
+      },
+      "id": "0d3a80c3-2495-4296-b065-953b20d71968",
+      "name": "Responder no autorizado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        400,
+        432
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Sistema de citas": {
+      "main": [
+        [
+          {
+            "node": "Validar secreto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar secreto": {
+      "main": [
+        [
+          {
+            "node": "Autorizado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Autorizado?": {
+      "main": [
+        [
+          {
+            "node": "Preparar payload Evolution",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder no autorizado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar payload Evolution": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp - Evolution API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WhatsApp - Evolution API": {
+      "main": [
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "4e92a690-06b5-426b-bfc6-06389aac5696",
+  "meta": {
+    "instanceId": "5b3b7773a095832dea4f30e848125e5009bd06a9efd798b7d0c660e8372bb34f"
+  },
+  "id": "MW87nCgbwNDeHvbw",
+  "tags": []
+}
