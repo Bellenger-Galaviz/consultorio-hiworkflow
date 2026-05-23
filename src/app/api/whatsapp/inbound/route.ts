@@ -9,7 +9,9 @@ const incomingSchema = z.object({
   message: z.string().min(1).optional(),
   text: z.string().min(1).optional(),
   body: z.string().min(1).optional(),
+  direction: z.string().optional(),
   deliveryMode: z.enum(["SEND", "COLLECT"]).optional(),
+  fromMe: z.boolean().optional(),
   agent: z
     .object({
       intent: z.string().nullish(),
@@ -39,6 +41,7 @@ export async function POST(request: Request) {
 
   const phone = parsed.data.phone ?? parsed.data.from ?? parsed.data.number;
   const message = parsed.data.message ?? parsed.data.text ?? parsed.data.body;
+  const direction = parsed.data.direction?.toUpperCase();
   const agent = parsed.data.agent
     ? {
         intent: parsed.data.agent.intent ?? undefined,
@@ -52,6 +55,14 @@ export async function POST(request: Request) {
 
   if (!phone || !message) {
     return NextResponse.json({ ok: false, error: "Missing phone or message" }, { status: 400 });
+  }
+
+  if (parsed.data.fromMe || direction === "OUTBOUND") {
+    return NextResponse.json({
+      ok: true,
+      ignored: true,
+      reason: "IGNORED_OWN_MESSAGE"
+    });
   }
 
   const result = await handleIncomingWhatsAppMessage({
