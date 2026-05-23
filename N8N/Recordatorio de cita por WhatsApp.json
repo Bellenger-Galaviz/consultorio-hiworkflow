@@ -67,7 +67,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const whatsapp = $json.body?.whatsapp ?? {};\nconst client = $json.body?.client ?? {};\n\nconst number = String(whatsapp.to ?? client.phone ?? '').replace(/\\D/g, '');\nconst text = String(whatsapp.message ?? whatsapp.text ?? '').trim();\n\nif (!number || !text) {\n  throw new Error('Faltan number o text para Evolution API');\n}\n\nreturn [\n  {\n    json: {\n      ...$json,\n      evolutionPayload: {\n        number,\n        text,\n      },\n    },\n  },\n];"
+        "jsCode": "const whatsapp = $json.body?.whatsapp ?? {};\nconst client = $json.body?.client ?? {};\nconst event = String($json.body?.event ?? '');\n\nconst number = String(whatsapp.to ?? client.phone ?? '').replace(/\\D/g, '');\nconst text = String(whatsapp.message ?? whatsapp.text ?? '').trim();\nconst file = whatsapp.file ?? null;\n\nfunction mediaTypeFromMime(mimeType) {\n  const mime = String(mimeType ?? '').toLowerCase();\n  if (mime.startsWith('image/')) return 'image';\n  if (mime.startsWith('video/')) return 'video';\n  if (mime.startsWith('audio/')) return 'audio';\n  return 'document';\n}\n\nif (event === 'client.whatsapp.file.requested' || file?.data) {\n  if (!number || !file?.data || !file?.fileName) {\n    throw new Error('Faltan number o archivo para Evolution API');\n  }\n\n  return [{\n    json: {\n      ...$json,\n      evolutionUrl: 'https://evo.hiworkflow.mx/message/sendMedia/consultorioPrueba',\n      evolutionPayload: {\n        number,\n        mediatype: mediaTypeFromMime(file.mimeType),\n        mimetype: file.mimeType || 'application/octet-stream',\n        caption: String(whatsapp.caption ?? '').trim(),\n        media: file.data,\n        fileName: file.fileName\n      }\n    }\n  }];\n}\n\nif (!number || !text) {\n  throw new Error('Faltan number o text para Evolution API');\n}\n\nreturn [{\n  json: {\n    ...$json,\n    evolutionUrl: 'https://evo.hiworkflow.mx/message/sendText/consultorioPrueba',\n    evolutionPayload: {\n      number,\n      text\n    }\n  }\n}];"
       },
       "id": "926b73d4-e507-41cd-89a7-077240fe67ac",
       "name": "Preparar payload Evolution",
@@ -81,7 +81,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://evo.hiworkflow.mx/message/sendText/consultorioPrueba",
+        "url": "={{$json.evolutionUrl}}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -210,7 +210,7 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "4e92a690-06b5-426b-bfc6-06389aac5696",
+  "versionId": "271d284e-812f-4741-938f-8b0d562d92d0",
   "meta": {
     "instanceId": "5b3b7773a095832dea4f30e848125e5009bd06a9efd798b7d0c660e8372bb34f"
   },

@@ -20,7 +20,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body ?? $json;\nconst data = body.data ?? body;\nconst key = data.key ?? {};\nconst messageObject = data.message ?? {};\n\nconst remoteJid = key.remoteJid ?? key.remoteJidAlt ?? body.remoteJid ?? body.from ?? body.phone ?? body.sender ?? '';\nconst remoteJidText = String(remoteJid);\nconst phone = remoteJidText.replace(/@s\\.whatsapp\\.net|@g\\.us/g, '').replace(/\\D/g, '');\n\nfunction valueToText(value) {\n  if (value === undefined || value === null) return '';\n  if (typeof value === 'string') return value.trim();\n  if (typeof value === 'number') return String(value);\n  return '';\n}\n\nfunction firstText(...values) {\n  for (const value of values) {\n    const text = valueToText(value);\n    if (text) return text;\n  }\n  return '';\n}\n\nfunction getButtonText(message) {\n  const buttonResponse = message.buttonsResponseMessage;\n  const templateReply = message.templateButtonReplyMessage;\n  const listReply = message.listResponseMessage?.singleSelectReply;\n  const nativeParams = message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;\n\n  let nativeText = '';\n  if (nativeParams) {\n    try {\n      const parsed = JSON.parse(nativeParams);\n      nativeText = firstText(parsed.id, parsed.button_id, parsed.selectedId, parsed.display_text);\n    } catch (error) {}\n  }\n\n  return firstText(\n    buttonResponse?.selectedButtonId,\n    buttonResponse?.selectedDisplayText,\n    templateReply?.selectedId,\n    templateReply?.selectedDisplayText,\n    listReply?.selectedRowId,\n    listReply?.title,\n    nativeText\n  );\n}\n\nconst buttonText = getButtonText(messageObject);\nconst message = firstText(\n  body.message,\n  body.text,\n  body.body,\n  messageObject.conversation,\n  messageObject.extendedTextMessage?.text,\n  messageObject.imageMessage?.caption,\n  messageObject.videoMessage?.caption,\n  messageObject.documentMessage?.caption,\n  messageObject.buttonsResponseMessage?.selectedDisplayText,\n  messageObject.templateButtonReplyMessage?.selectedDisplayText,\n  buttonText\n);\n\nconst fromMe = key.fromMe === true || data.fromMe === true || body.fromMe === true;\nconst isGroup = remoteJidText.includes('@g.us') || remoteJidText.toLowerCase().includes('group') || phone.length > 15;\n\nconst normalized = message\n  .toLowerCase()\n  .normalize('NFD')\n  .replace(/[\\u0300-\\u036f]/g, '')\n  .trim();\n\nconst isSystemEcho =\n  fromMe &&\n  (\n    (normalized.startsWith('hola ') && (normalized.includes('recordamos') || normalized.includes('tu cita') || normalized.includes('su cita'))) ||\n    normalized.startsWith('gracias ') ||\n    normalized.startsWith('claro ') ||\n    normalized.startsWith('entendido ') ||\n    normalized.startsWith('listo ') ||\n    normalized.startsWith('ese horario ') ||\n    normalized.includes('estos son algunos espacios disponibles') ||\n    normalized.includes('estas son las opciones mas cercanas') ||\n    normalized.includes('si hay disponibilidad') ||\n    normalized.includes('no tengo disponibilidad') ||\n    normalized.includes('lo mas cercano que encontre') ||\n    normalized.includes('puede elegir una opcion') ||\n    normalized.includes('responde con el numero de la opcion') ||\n    normalized.includes('no pude identificar') ||\n    normalized.includes('fecha y hora que enviaste ya pasaron') ||\n    normalized.includes('no encontre horarios disponibles') ||\n    normalized.includes('registramos tu nueva cita') ||\n    normalized.includes('esta cita esta pendiente')\n  );\n\nlet skip = false;\nlet skipReason = null;\n\nif (isGroup) {\n  skip = true;\n  skipReason = 'IGNORED_GROUP_MESSAGE';\n} else if (isSystemEcho) {\n  skip = true;\n  skipReason = 'IGNORED_SYSTEM_ECHO';\n} else if (!phone || !message) {\n  skip = true;\n  skipReason = 'IGNORED_EMPTY_MESSAGE';\n}\n\nreturn [{ json: { phone, message, fromMe, remoteJid: remoteJidText, skip, skipReason } }];"
+        "jsCode": "const body = $json.body ?? $json;\nconst data = body.data ?? body;\nconst key = data.key ?? {};\nconst messageObject = data.message ?? {};\nconst messageType = data.messageType ?? body.messageType ?? '';\n\nconst remoteJid = key.remoteJidAlt ?? key.remoteJid ?? body.remoteJid ?? body.from ?? body.phone ?? body.sender ?? '';\nconst remoteJidText = String(remoteJid);\nconst senderText = String(body.sender ?? data.sender ?? '');\nconst phoneSource = remoteJidText.includes('@s.whatsapp.net') ? remoteJidText : senderText || remoteJidText;\nconst phone = phoneSource.replace(/@s\\.whatsapp\\.net|@g\\.us|@lid/g, '').replace(/\\D/g, '');\n\nfunction valueToText(value) {\n  if (value === undefined || value === null) return '';\n  if (typeof value === 'string') return value.trim();\n  if (typeof value === 'number') return String(value);\n  return '';\n}\n\nfunction firstText(...values) {\n  for (const value of values) {\n    const text = valueToText(value);\n    if (text) return text;\n  }\n  return '';\n}\n\nfunction getButtonText(message) {\n  const buttonResponse = message.buttonsResponseMessage;\n  const templateReply = message.templateButtonReplyMessage;\n  const listReply = message.listResponseMessage?.singleSelectReply;\n  const nativeParams = message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;\n\n  let nativeText = '';\n  if (nativeParams) {\n    try {\n      const parsed = JSON.parse(nativeParams);\n      nativeText = firstText(parsed.id, parsed.button_id, parsed.selectedId, parsed.display_text);\n    } catch (error) {}\n  }\n\n  return firstText(\n    buttonResponse?.selectedButtonId,\n    buttonResponse?.selectedDisplayText,\n    templateReply?.selectedId,\n    templateReply?.selectedDisplayText,\n    listReply?.selectedRowId,\n    listReply?.title,\n    nativeText\n  );\n}\n\nconst mediaMessage =\n  messageObject.documentMessage ??\n  messageObject.imageMessage ??\n  messageObject.videoMessage ??\n  messageObject.audioMessage ??\n  messageObject.stickerMessage ??\n  null;\nconst hasFile = Boolean(mediaMessage);\nconst fallbackFileName = messageType ? `${messageType}-${key.id ?? Date.now()}` : `archivo-${key.id ?? Date.now()}`;\nconst fileName = firstText(mediaMessage?.fileName, mediaMessage?.title, mediaMessage?.caption) || fallbackFileName;\nconst mimeType = firstText(mediaMessage?.mimetype) || 'application/octet-stream';\nconst caption = firstText(mediaMessage?.caption);\nconst buttonText = getButtonText(messageObject);\nconst message = firstText(\n  body.message,\n  body.text,\n  body.body,\n  messageObject.conversation,\n  messageObject.extendedTextMessage?.text,\n  messageObject.imageMessage?.caption,\n  messageObject.videoMessage?.caption,\n  messageObject.documentMessage?.caption,\n  messageObject.buttonsResponseMessage?.selectedDisplayText,\n  messageObject.templateButtonReplyMessage?.selectedDisplayText,\n  buttonText\n);\n\nconst fromMe = key.fromMe === true || data.fromMe === true || body.fromMe === true;\nconst isGroup = remoteJidText.includes('@g.us') || remoteJidText.toLowerCase().includes('group') || phone.length > 15;\n\nconst normalized = message\n  .toLowerCase()\n  .normalize('NFD')\n  .replace(/[\\u0300-\\u036f]/g, '')\n  .trim();\n\nconst isSystemEcho =\n  fromMe &&\n  (\n    (normalized.startsWith('hola ') && (normalized.includes('recordamos') || normalized.includes('tu cita') || normalized.includes('su cita'))) ||\n    normalized.startsWith('gracias ') ||\n    normalized.startsWith('claro ') ||\n    normalized.startsWith('entendido ') ||\n    normalized.startsWith('listo ') ||\n    normalized.startsWith('ese horario ') ||\n    normalized.includes('estos son algunos espacios disponibles') ||\n    normalized.includes('estas son las opciones mas cercanas') ||\n    normalized.includes('si hay disponibilidad') ||\n    normalized.includes('no tengo disponibilidad') ||\n    normalized.includes('lo mas cercano que encontre') ||\n    normalized.includes('puede elegir una opcion') ||\n    normalized.includes('responde con el numero de la opcion') ||\n    normalized.includes('no pude identificar') ||\n    normalized.includes('fecha y hora que enviaste ya pasaron') ||\n    normalized.includes('no encontre horarios disponibles') ||\n    normalized.includes('registramos tu nueva cita') ||\n    normalized.includes('esta cita esta pendiente')\n  );\n\nlet skip = false;\nlet skipReason = null;\n\nif (isGroup) {\n  skip = true;\n  skipReason = 'IGNORED_GROUP_MESSAGE';\n} else if (isSystemEcho) {\n  skip = true;\n  skipReason = 'IGNORED_SYSTEM_ECHO';\n} else if (!phone || (!message && !hasFile)) {\n  skip = true;\n  skipReason = 'IGNORED_EMPTY_MESSAGE';\n}\n\nreturn [{\n  json: {\n    phone,\n    message,\n    fromMe,\n    remoteJid: remoteJidText,\n    skip,\n    skipReason,\n    hasFile,\n    messageId: key.id ?? '',\n    instance: body.instance ?? data.instance ?? '',\n    serverUrl: body.server_url ?? body.serverUrl ?? '',\n    apiKey: body.apikey ?? body.apiKey ?? '',\n    fileName,\n    mimeType,\n    caption\n  }\n}];"
       },
       "id": "cfb3d084-c58d-4d93-a925-df63c8e44473",
       "name": "Normalizar mensaje",
@@ -338,6 +338,115 @@
         2480,
         -96
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-client-file",
+              "leftValue": "={{$json.hasFile === true && $json.skip === false}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "detect-client-file",
+      "name": "Es archivo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        288,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.serverUrl + \"/chat/getBase64FromMediaMessage/\" + $json.instance}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{$json.apiKey}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: { key: { id: $json.messageId } }, convertToMp4: true }) }}",
+        "options": {}
+      },
+      "id": "download-evolution-file-base64",
+      "name": "Obtener archivo Evolution",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        512,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Normalizar mensaje').first().json;\nconst response = $json ?? {};\nconst data =\n  response.base64 ??\n  response.data ??\n  response.file ??\n  response.media ??\n  response?.result?.base64 ??\n  response?.message?.base64 ??\n  response?.response?.base64 ??\n  '';\n\nif (!data) {\n  throw new Error('Evolution API no devolvio base64 para el archivo');\n}\n\nreturn [{\n  json: {\n    phone: original.phone,\n    fileName: original.fileName || 'archivo',\n    mimeType: original.mimeType || 'application/octet-stream',\n    caption: original.caption || original.message || '',\n    data\n  }\n}];"
+      },
+      "id": "prepare-client-file-payload",
+      "name": "Preparar archivo para sistema",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        736,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://consultorio.hiworkflow.mx/api/whatsapp/files",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-webhook-secret",
+              "value": "CAMBIA_ESTE_SECRETO_POR_UNO_LARGO"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phone\": \"{{$json.phone}}\",\n  \"fileName\": \"{{$json.fileName}}\",\n  \"mimeType\": \"{{$json.mimeType}}\",\n  \"caption\": \"{{$json.caption}}\",\n  \"data\": \"{{$json.data}}\"\n}",
+        "options": {}
+      },
+      "id": "send-client-file-to-system",
+      "name": "Enviar archivo al sistema",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        976,
+        -160
+      ]
     }
   ],
   "pinData": {},
@@ -357,7 +466,7 @@
       "main": [
         [
           {
-            "node": "Procesar mensaje?",
+            "node": "Es archivo?",
             "type": "main",
             "index": 0
           }
@@ -508,6 +617,57 @@
       "main": [
         []
       ]
+    },
+    "Es archivo?": {
+      "main": [
+        [
+          {
+            "node": "Obtener archivo Evolution",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Procesar mensaje?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener archivo Evolution": {
+      "main": [
+        [
+          {
+            "node": "Preparar archivo para sistema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar archivo para sistema": {
+      "main": [
+        [
+          {
+            "node": "Enviar archivo al sistema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar archivo al sistema": {
+      "main": [
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": true,
@@ -515,7 +675,7 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "ac372a94-8fa2-4427-81d3-7b245dcbf238",
+  "versionId": "f44b49ce-837f-4132-b35b-45eb71699917",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "5b3b7773a095832dea4f30e848125e5009bd06a9efd798b7d0c660e8372bb34f"
