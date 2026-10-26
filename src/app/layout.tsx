@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Control de asistencias y citas",
-  description: "Sistema web para clientes, citas, asistencias y recordatorios por WhatsApp."
+  title: "HiWorkflow Consultorio",
+  description: "Agenda, expedientes y atención por WhatsApp para consultorios."
 };
 
 export default function RootLayout({

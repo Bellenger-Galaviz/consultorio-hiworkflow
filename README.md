@@ -1,190 +1,138 @@
-# Control de asistencias, citas y recordatorios
+# HiWorkflow Consultorio
 
-Sistema web en Next.js para administrar clientes, citas, asistencias y recordatorios por WhatsApp usando n8n como puente hacia Evolution API.
+Plataforma web para consultorios que centraliza agenda, pacientes, expedientes y conversaciones de WhatsApp. Está pensada para profesionales de la salud que hoy administran citas manualmente y necesitan reducir confirmaciones, cancelaciones y reprogramaciones por teléfono.
+
+[Aplicación en vivo](https://consultorio.hiworkflow.mx) · [Demo sin datos reales](https://consultorio.hiworkflow.mx/demo) · [Historial de cambios](https://github.com/Bellenger-Galaviz/consultorio-hiworkflow/commits/main)
+
+> La ruta `/demo` utiliza exclusivamente información ficticia y permite revisar la interfaz sin acceder a expedientes reales.
+
+## Vista del producto
+
+![Calendario semanal y próximas citas](docs/screenshots/dashboard.png)
+
+![CRM de WhatsApp integrado](docs/screenshots/crm-whatsapp.png)
+
+## Qué resuelve
+
+- Agenda semanal con estados, historial y reprogramaciones.
+- Recordatorios automáticos y conversaciones por WhatsApp.
+- Interpretación de respuestas naturales para confirmar, cancelar o mover citas.
+- CRM con historial por paciente, mensajes, notas y archivos clínicos.
+- Expediente consultable desde el CRM y desde cada cita.
+- Importación masiva de pacientes desde CSV o Excel.
+- Lista de espera para aprovechar espacios liberados.
+- Métricas de asistencia, cancelaciones y pacientes activos.
+- Aislamiento de datos por cuenta del consultorio.
+
+## Arquitectura
+
+La lógica de negocio vive en TypeScript. n8n se utiliza como capa de integración con WhatsApp y para ejecutar automatizaciones programadas; sus exportaciones JSON se conservan únicamente como respaldo reproducible de infraestructura.
+
+```text
+src/app/                  UI, Server Actions y endpoints HTTP
+src/lib/                  citas, recordatorios, WhatsApp y reglas de negocio
+prisma/                   modelo relacional y migraciones de PostgreSQL
+N8N/                      respaldos importables de los workflows activos
+docs/                     documentación operativa e integración
+```
+
+Flujo principal:
+
+```text
+WhatsApp / Evolution API
+          ↓
+        n8n
+          ↓
+Endpoints TypeScript de Next.js
+          ↓
+Reglas de citas y conversación
+          ↓
+PostgreSQL / Prisma
+```
 
 ## Stack
 
-- Next.js App Router
-- React
-- Prisma
-- SQLite para desarrollo local
-- Webhook configurable de n8n para WhatsApp
-- Login y registro de doctores
-- Datos separados por doctor
-- Recordatorios automáticos 24 horas antes y 1 hora antes
+- Next.js 15 con App Router y React 19
+- TypeScript
+- PostgreSQL y Prisma ORM
+- Tailwind CSS y Lucide Icons
+- n8n para orquestación
+- Evolution API para WhatsApp
+- Zod para validación de entradas
 
-## Primer arranque local
+## Desarrollo local
 
-1. Instala dependencias:
+Requisitos: Node.js 20 o superior y PostgreSQL.
 
 ```powershell
 npm install
-```
-
-2. Crea tu archivo de entorno:
-
-```powershell
 Copy-Item .env.example .env
-```
-
-3. Para desarrollo necesitas una base PostgreSQL local o remota y ajustar `DATABASE_URL`.
-
-4. Genera Prisma Client:
-
-```powershell
 npm run prisma:generate
-```
-
-5. Crea la base y datos de prueba:
-
-```powershell
 npm run db:init
+npm run dev
 ```
 
-Este comando crea un usuario demo:
+Después abre [http://localhost:3000](http://localhost:3000). La semilla crea una cuenta de demostración:
 
 ```text
 Correo: doctor@demo.com
 Contraseña: Demo12345
 ```
 
-6. Arranca el proyecto:
-
-```powershell
-npm run dev
-```
-
-7. Abre:
-
-```text
-http://localhost:3000
-```
+La demostración pública también está disponible localmente en [http://localhost:3000/demo](http://localhost:3000/demo) y no requiere base de datos.
 
 ## Variables de entorno
 
+Crea `.env` a partir de `.env.example`:
+
 ```env
-DATABASE_URL="file:./dev.db"
-N8N_REMINDER_WEBHOOK_URL="https://n8n.hiworkflow.mx/webhook/recordatorio-cita"
-N8N_WEBHOOK_SECRET="cambia-este-secreto"
-APP_PUBLIC_URL="https://consultorio.hiworkflow.mx"
+DATABASE_URL="postgresql://usuario:password@localhost:5432/consultorio_db?schema=public"
+N8N_REMINDER_WEBHOOK_URL="https://tu-n8n.example/webhook/recordatorio-cita"
+N8N_WEBHOOK_SECRET="un-secreto-largo-y-aleatorio"
+APP_PUBLIC_URL="http://localhost:3000"
 ```
 
-## Flujo de WhatsApp con n8n
+Nunca publiques `.env`, credenciales de PostgreSQL, claves de OpenAI ni tokens de n8n.
 
-La plantilla importable está en:
+## Base de datos
 
-```text
-docs/n8n-evolution-whatsapp-workflow.json
+```powershell
+npm run prisma:generate
+npm run prisma:deploy
+npm run seed
 ```
 
-La plantilla para ejecutar los automáticos cada 15 minutos está en:
+Las migraciones incluyen clientes, citas, sesiones, recordatorios, conversaciones, notificaciones, lista de espera, historial de eventos y archivos de expediente.
 
-```text
-docs/n8n-schedule-due-reminders-workflow.json
+## Integración con WhatsApp
+
+La aplicación expone endpoints autenticados para recibir mensajes, registrar archivos y solicitar recordatorios. La guía operativa está en [`docs/N8N_WHATSAPP.md`](docs/N8N_WHATSAPP.md).
+
+Los workflows versionados son:
+
+- `N8N/Recordatorio de cita por WhatsApp.json`
+- `N8N/Ejecutar recordatorios automáticos de citas.json`
+- `N8N/Recibir respuestas WhatsApp y actualizar citas.json`
+
+El código que valida intenciones, conserva contexto, consulta disponibilidad y modifica citas está en [`src/lib/whatsapp-bot.ts`](src/lib/whatsapp-bot.ts), no dentro de los JSON exportados.
+
+## Verificación
+
+```powershell
+npm run build
+npx prisma validate
 ```
 
-La plantilla para recibir respuestas de clientes por WhatsApp está en:
+## Despliegue
 
-```text
-docs/n8n-inbound-whatsapp-bot-workflow.json
+El despliegue actual utiliza PostgreSQL, PM2 y almacenamiento local persistente en un servidor de DigitalOcean. Consulta [`DEPLOY_DIGITALOCEAN.md`](DEPLOY_DIGITALOCEAN.md).
+
+Vercel puede ejecutar la aplicación y la ruta de demostración, pero para usar expedientes en producción es necesario reemplazar el almacenamiento local de archivos por almacenamiento persistente compatible con S3. La base de datos también debe ser PostgreSQL externa, por ejemplo Neon, Supabase o Railway.
+
+## Estado del proyecto
+
+El repositorio conserva el historial incremental de implementación: agenda, WhatsApp, agente conversacional, métricas, importación de pacientes, expedientes y correcciones de producción. Consulta el historial con:
+
+```powershell
+git log --oneline --graph
 ```
-
-La guía completa está en:
-
-```text
-docs/N8N_WHATSAPP.md
-```
-
-Cuando presionas el boton de WhatsApp en una cita, el sistema envia un `POST` a `N8N_REMINDER_WEBHOOK_URL` con este formato:
-
-```json
-{
-  "event": "appointment.reminder.requested",
-  "sentFrom": "http://localhost:3000",
-  "client": {
-    "id": "client_id",
-    "fullName": "Ana Martinez",
-    "phone": "5216141234567",
-    "email": "ana@example.com"
-  },
-  "appointment": {
-    "id": "appointment_id",
-    "title": "Consulta inicial",
-    "startsAt": "2026-05-14T10:00:00.000Z",
-    "durationMin": 45,
-    "status": "CONFIRMED"
-  },
-  "whatsapp": {
-    "to": "5216141234567",
-    "message": "Hola Ana Martinez..."
-  }
-}
-```
-
-## Recordatorios automáticos
-
-La app incluye un endpoint para enviar recordatorios pendientes:
-
-```text
-POST /api/reminders/due
-Header: x-webhook-secret: cambia-este-secreto
-```
-
-Este endpoint debe ejecutarse de forma programada, por ejemplo cada 15 minutos desde n8n, cron-job.org, Vercel Cron o el hosting que uses.
-
-Envia automaticamente:
-
-- 24 horas antes de la cita: `Hola {cliente}, te recordamos que tienes una cita "{titulo}" programada para {fecha}. Por favor confirma tu asistencia.`
-- 1 hora antes de la cita: `Hola {cliente}, tu cita "{titulo}" es en aproximadamente 1 hora. Te esperamos.`
-
-El boton de WhatsApp en la tabla queda para envios manuales, por ejemplo cuando quieres reenviar un recordatorio, confirmar algo al momento o probar que el flujo de n8n funciona.
-
-## Bot de WhatsApp
-
-El endpoint de respuestas entrantes es:
-
-```text
-POST /api/whatsapp/inbound
-Header: x-webhook-secret: cambia-este-secreto
-```
-
-Acepta JSON flexible:
-
-```json
-{
-  "phone": "5216141234567",
-  "message": "confirmo"
-}
-```
-
-Acciones soportadas:
-
-- Confirmar cita: `confirmo`, `si`, `ok`, `asisto`, `voy`.
-- Pedir reprogramación: `cancelar`, `reprogramar`, `cambiar`, `no puedo`.
-- Registrar nueva fecha: `25/05/2026 16:30`.
-
-Cuando se reprograma, la cita original queda como `REPROGRAMMED` y se crea una cita nueva con sus propios recordatorios.
-
-En n8n puedes crear:
-
-1. Webhook node que reciba el payload.
-2. IF node para validar el header `x-webhook-secret`.
-3. HTTP Request node hacia Evolution API.
-4. Respuesta final al sistema con `200 OK`.
-
-## Publicacion futura
-
-La guía para DigitalOcean está en:
-
-```text
-DEPLOY_DIGITALOCEAN.md
-```
-
-Para subirlo con dominio se recomienda:
-
-- Cambiar la base a PostgreSQL en hosting como Neon, Supabase, Railway o Render.
-- Ajustar `DATABASE_URL`.
-- Cambiar `APP_PUBLIC_URL` por tu dominio real.
-- Usar HTTPS para n8n y para la web.
-
-Cuando elijas hosting, el siguiente paso sera preparar el proyecto para produccion y conectar dominio.
