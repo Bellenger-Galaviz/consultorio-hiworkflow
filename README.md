@@ -1,138 +1,100 @@
-# HiWorkflow Consultorio
+HiWorkflow Consultorio
 
-Plataforma web para consultorios que centraliza agenda, pacientes, expedientes y conversaciones de WhatsApp. Está pensada para profesionales de la salud que hoy administran citas manualmente y necesitan reducir confirmaciones, cancelaciones y reprogramaciones por teléfono.
+Appointment, patient and WhatsApp management for small medical clinics. Built to replace the paper agenda and the stream of phone calls for confirmations, cancellations and rescheduling.
 
-[Aplicación en vivo](https://consultorio.hiworkflow.mx) · [Demo sin datos reales](https://consultorio.hiworkflow.mx/demo) · [Historial de cambios](https://github.com/Bellenger-Galaviz/consultorio-hiworkflow/commits/main)
+Stack: Next.js 15 (App Router) · React 19 · TypeScript · PostgreSQL + Prisma · Tailwind CSS · Zod
 
-> La ruta `/demo` utiliza exclusivamente información ficticia y permite revisar la interfaz sin acceder a expedientes reales.
+Live demo: https://consultorio-hiworkflow.vercel.app/demo — fictitious data, no sign-up needed.
 
-## Vista del producto
+Deployment status: ran in production on DigitalOcean (PostgreSQL + PM2 + local file storage) until I took the server down rather than keep paying for it while the product had no customers. It now runs on Vercel with Supabase (PostgreSQL + object storage) so it can be opened and tried at any time. The screenshots below are from the running app, and npm run dev brings up a working instance with seeded demo data in about two minutes.
 
-![Calendario semanal y próximas citas](docs/screenshots/dashboard.png)
+Screenshots
 
-![CRM de WhatsApp integrado](docs/screenshots/crm-whatsapp.png)
+Weekly calendar and upcoming appointments
 
-## Qué resuelve
+Dashboard
 
-- Agenda semanal con estados, historial y reprogramaciones.
-- Recordatorios automáticos y conversaciones por WhatsApp.
-- Interpretación de respuestas naturales para confirmar, cancelar o mover citas.
-- CRM con historial por paciente, mensajes, notas y archivos clínicos.
-- Expediente consultable desde el CRM y desde cada cita.
-- Importación masiva de pacientes desde CSV o Excel.
-- Lista de espera para aprovechar espacios liberados.
-- Métricas de asistencia, cancelaciones y pacientes activos.
-- Aislamiento de datos por cuenta del consultorio.
+WhatsApp CRM, integrated per patient
 
-## Arquitectura
+WhatsApp CRM
 
-La lógica de negocio vive en TypeScript. n8n se utiliza como capa de integración con WhatsApp y para ejecutar automatizaciones programadas; sus exportaciones JSON se conservan únicamente como respaldo reproducible de infraestructura.
+What it does
 
-```text
-src/app/                  UI, Server Actions y endpoints HTTP
-src/lib/                  citas, recordatorios, WhatsApp y reglas de negocio
-prisma/                   modelo relacional y migraciones de PostgreSQL
-N8N/                      respaldos importables de los workflows activos
-docs/                     documentación operativa e integración
-```
+Appointments
 
-Flujo principal:
+Weekly calendar with per-appointment status, full history and rescheduling
+Waitlist that picks up slots when someone cancels
+Automatic reminders over WhatsApp
 
-```text
-WhatsApp / Evolution API
-          ↓
-        n8n
-          ↓
-Endpoints TypeScript de Next.js
-          ↓
-Reglas de citas y conversación
-          ↓
-PostgreSQL / Prisma
-```
+WhatsApp as the front door
 
-## Stack
+Patients reply in plain language — "no puedo el martes", "sí ahí estaré", "me lo cambias?" — and the system reads the intent and confirms, cancels or reschedules without a phone call
+Every conversation lands in the patient's record, so the clinic sees one thread per person instead of a shared inbox
 
-- Next.js 15 con App Router y React 19
-- TypeScript
-- PostgreSQL y Prisma ORM
-- Tailwind CSS y Lucide Icons
-- n8n para orquestación
-- Evolution API para WhatsApp
-- Zod para validación de entradas
+Patient CRM
 
-## Desarrollo local
+History, messages, notes and clinical files per patient
+Bulk import from CSV or Excel for clinics migrating off a spreadsheet
 
-Requisitos: Node.js 20 o superior y PostgreSQL.
+Operations
 
-```powershell
+Attendance, cancellation and active-patient metrics
+Per-clinic data isolation: each account only ever sees its own records
+Architecture
+Next.js 15 (App Router)  →  business logic, UI, API routes
+Prisma                   →  PostgreSQL
+n8n + Evolution API      →  WhatsApp transport and scheduling only
+
+One decision worth calling out: the business logic lives in TypeScript, not in the n8n workflows. n8n handles message transport and triggers; deciding what a reply means and what happens to an appointment is application code that can be read, reviewed and tested. The exported workflows in N8N/ are deliberately thin.
+
+Per-clinic isolation is enforced at the query layer rather than trusted to the UI, so a bug in a component cannot leak another clinic's records.
+
+Running it locally
+
+Requires Node.js 20+ and PostgreSQL.
+
+bash
 npm install
-Copy-Item .env.example .env
+cp .env.example .env          # fill in DATABASE_URL
 npm run prisma:generate
-npm run db:init
+npm run db:init               # schema + seed with a demo doctor account
 npm run dev
-```
 
-Después abre [http://localhost:3000](http://localhost:3000). La semilla crea una cuenta de demostración:
+Open http://localhost:3000. The seed creates a demo doctor you can sign in as.
 
-```text
-Correo: doctor@demo.com
-Contraseña: Demo12345
-```
+/demo runs without a database, with fictitious data — useful for a quick look at the UI.
 
-La demostración pública también está disponible localmente en [http://localhost:3000/demo](http://localhost:3000/demo) y no requiere base de datos.
+Checks
 
-## Variables de entorno
-
-Crea `.env` a partir de `.env.example`:
-
-```env
-DATABASE_URL="postgresql://usuario:password@localhost:5432/consultorio_db?schema=public"
-N8N_REMINDER_WEBHOOK_URL="https://tu-n8n.example/webhook/recordatorio-cita"
-N8N_WEBHOOK_SECRET="un-secreto-largo-y-aleatorio"
-APP_PUBLIC_URL="http://localhost:3000"
-```
-
-Nunca publiques `.env`, credenciales de PostgreSQL, claves de OpenAI ni tokens de n8n.
-
-## Base de datos
-
-```powershell
-npm run prisma:generate
-npm run prisma:deploy
-npm run seed
-```
-
-Las migraciones incluyen clientes, citas, sesiones, recordatorios, conversaciones, notificaciones, lista de espera, historial de eventos y archivos de expediente.
-
-## Integración con WhatsApp
-
-La aplicación expone endpoints autenticados para recibir mensajes, registrar archivos y solicitar recordatorios. La guía operativa está en [`docs/N8N_WHATSAPP.md`](docs/N8N_WHATSAPP.md).
-
-Los workflows versionados son:
-
-- `N8N/Recordatorio de cita por WhatsApp.json`
-- `N8N/Ejecutar recordatorios automáticos de citas.json`
-- `N8N/Recibir respuestas WhatsApp y actualizar citas.json`
-
-El código que valida intenciones, conserva contexto, consulta disponibilidad y modifica citas está en [`src/lib/whatsapp-bot.ts`](src/lib/whatsapp-bot.ts), no dentro de los JSON exportados.
-
-## Verificación
-
-```powershell
+bash
 npm run build
 npx prisma validate
-```
+Deployment
 
-## Despliegue
+Current: Vercel (app) + Supabase (PostgreSQL and file storage).
 
-El despliegue actual utiliza PostgreSQL, PM2 y almacenamiento local persistente en un servidor de DigitalOcean. Consulta [`DEPLOY_DIGITALOCEAN.md`](DEPLOY_DIGITALOCEAN.md).
+Previously: a DigitalOcean droplet running PostgreSQL, PM2 and local disk storage, behind a reverse proxy. That setup worked fine; I moved off it because keeping a VPS running for a product with no customers was not worth the monthly cost.
 
-Vercel puede ejecutar la aplicación y la ruta de demostración, pero para usar expedientes en producción es necesario reemplazar el almacenamiento local de archivos por almacenamiento persistente compatible con S3. La base de datos también debe ser PostgreSQL externa, por ejemplo Neon, Supabase o Railway.
+Notes for anyone deploying this:
 
-## Estado del proyecto
+Vercel's filesystem is ephemeral, so clinical file uploads need S3-compatible object storage — Supabase Storage covers it.
+Prisma on a pooled Postgres connection needs both DATABASE_URL (pooled) and DIRECT_URL (direct) set; migrations use the direct one.
+The WhatsApp layer needs a reachable n8n instance and Evolution API. Everything else runs without them.
 
-El repositorio conserva el historial incremental de implementación: agenda, WhatsApp, agente conversacional, métricas, importación de pacientes, expedientes y correcciones de producción. Consulta el historial con:
+See DEPLOY_DIGITALOCEAN.md for the VPS setup.
 
-```powershell
-git log --oneline --graph
-```
+Project structure
+src/        application code — routes, components, business logic
+prisma/     schema, migrations and seed
+N8N/        exported workflows (transport only)
+docs/       screenshots and notes
+public/     static assets
+About this project
+
+I designed, built and shipped this on my own: data model, interface, business rules, WhatsApp integration and deployment. It started as a real problem I kept seeing — small clinics running their entire schedule through a notebook and a phone — and I wanted to find out how far one person could take a product end to end with AI-assisted development.
+
+Built with Claude Code and Codex, and reviewed line by line before anything shipped.
+
+License
+
+MIT — see LICENSE.
