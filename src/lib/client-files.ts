@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ClientFile } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { getLocalAbsolutePath, getLocalStorageRoot, getObject, putObject } from "@/lib/storage";
 
 const MAX_CLIENT_FILE_SIZE = 25 * 1024 * 1024;
 const SAFE_EXTENSIONS: Record<string, string> = {
@@ -20,11 +20,11 @@ const SAFE_EXTENSIONS: Record<string, string> = {
 };
 
 export function getClientFileStorageRoot() {
-  return process.env.CLIENT_FILE_STORAGE_DIR || path.join(process.cwd(), "storage", "client-files");
+  return getLocalStorageRoot();
 }
 
 export function getClientFileAbsolutePath(file: Pick<ClientFile, "storagePath">) {
-  return path.join(getClientFileStorageRoot(), file.storagePath);
+  return getLocalAbsolutePath(file.storagePath);
 }
 
 function sanitizeFilename(filename: string) {
@@ -86,10 +86,8 @@ export async function createClientFile({
   const baseName = extension ? safeName.slice(0, -extension.length) || "archivo" : safeName;
   const storedName = `${randomUUID()}-${baseName}${extension}`;
   const storagePath = path.posix.join(userId, clientId, storedName);
-  const absolutePath = path.join(getClientFileStorageRoot(), storagePath);
 
-  await mkdir(path.dirname(absolutePath), { recursive: true });
-  await writeFile(absolutePath, buffer);
+  await putObject(storagePath, buffer, mimeType);
 
   return prisma.clientFile.create({
     data: {
@@ -109,5 +107,5 @@ export async function createClientFile({
 }
 
 export async function readClientFileBuffer(file: Pick<ClientFile, "storagePath">) {
-  return readFile(getClientFileAbsolutePath(file));
+  return getObject(file.storagePath);
 }

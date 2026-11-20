@@ -13,7 +13,8 @@
     "prisma:studio": "prisma studio",
     "db:init": "prisma migrate dev --name init && tsx prisma/seed.ts",
     "db:deploy": "prisma migrate deploy",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
