@@ -6,6 +6,18 @@ export function getAppointmentEnd(startsAt: Date, durationMin: number) {
   return new Date(startsAt.getTime() + durationMin * 60 * 1000);
 }
 
+export function appointmentsOverlap(
+  aStart: Date,
+  aDurationMin: number,
+  bStart: Date,
+  bDurationMin: number
+) {
+  const aEnd = getAppointmentEnd(aStart, aDurationMin);
+  const bEnd = getAppointmentEnd(bStart, bDurationMin);
+
+  return aStart < bEnd && aEnd > bStart;
+}
+
 export async function findAppointmentConflict({
   userId,
   startsAt,
@@ -17,7 +29,7 @@ export async function findAppointmentConflict({
   durationMin: number;
   ignoreAppointmentId?: string;
 }) {
-  const endsAt = getAppointmentEnd(startsAt, durationMin);
+
   const appointments = await prisma.appointment.findMany({
     where: {
       userId,
@@ -28,12 +40,10 @@ export async function findAppointmentConflict({
     orderBy: { startsAt: "asc" }
   });
 
-  return (
-    appointments.find((appointment) => {
-      const existingEnd = getAppointmentEnd(appointment.startsAt, appointment.durationMin);
-
-      return startsAt < existingEnd && endsAt > appointment.startsAt;
-    }) ?? null
+    return (
+    appointments.find((appointment) =>
+      appointmentsOverlap(startsAt, durationMin, appointment.startsAt, appointment.durationMin)
+    ) ?? null
   );
 }
 

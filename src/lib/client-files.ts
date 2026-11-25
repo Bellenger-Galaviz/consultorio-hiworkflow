@@ -27,7 +27,7 @@ export function getClientFileAbsolutePath(file: Pick<ClientFile, "storagePath">)
   return getLocalAbsolutePath(file.storagePath);
 }
 
-function sanitizeFilename(filename: string) {
+export function sanitizeFilename(filename: string) {
   const clean = filename
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -38,7 +38,7 @@ function sanitizeFilename(filename: string) {
   return clean || "archivo";
 }
 
-function getExtension(originalName: string, mimeType: string) {
+export function getExtension(originalName: string, mimeType: string) {
   const fromName = path.extname(originalName).toLowerCase();
 
   if (fromName && fromName.length <= 10) {
